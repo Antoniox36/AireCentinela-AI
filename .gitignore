@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# Archivos de datos locales (Ignorar CSVs generados)
+*.csv
+data/*.csv
+!data/.gitkeep
