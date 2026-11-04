@@ -1,0 +1,16 @@
+# =============================================================================
+# 🍃 AireCentinela AI — Dependencias del Proyecto
+# Universidad Gerardo Barrios (UGB) — Sede San Miguel
+# =============================================================================
+
+# --- Módulo de Inteligencia Artificial y Datos (Samuel) ---
+pandas>=2.2.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+
+# --- Módulo Backend y Lectura Serial USB (Gabriel) ---
+pyserial>=3.5
+
+# --- Módulo Frontend y Dashboard Visual (Fredy) ---
+PyQt6>=6.6.0
+matplotlib>=3.8.0
