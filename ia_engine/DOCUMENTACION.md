@@ -98,6 +98,12 @@ En un entorno real de feria o monitoreo urbano, no se cuenta de antemano con mil
 
 ## 📤 6. Estructura del Entregable (Retorno Matemático)
 
+### Estructura de Columnas del CSV (`data/datos_ambientales.csv`)
+Sincronizada con la trama JSON emitida por el backend de Gabriel:
+`timestamp,temperatura,humedad,presion,pm10,pm25,pm100`
+
+El motor de IA extrae automáticamente las columnas requeridas `['temperatura', 'pm25']` para el modelado con Isolation Forest.
+
 La función principal es:
 ```python
 def evaluar_anomalia(ruta_csv=..., contamination=0.05) -> int:
@@ -129,7 +135,8 @@ elif estado == -1:
 Para ejecutar la suite de pruebas locales que valida tanto datos normales como inyección de anomalías:
 
 ```powershell
-python ia_engine/motor_ia.py
+py -3.13 ia_engine/motor_ia.py
+# (o si tu interprete por defecto es 3.13: python ia_engine/motor_ia.py)
 ```
 
 La suite ejecutará:

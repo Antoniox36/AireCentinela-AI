@@ -130,14 +130,18 @@ def generar_datos_prueba(ruta_destino=RUTA_CSV_DEFAULT, cantidad_filas=150, forz
     timestamps = []
     temperaturas = []
     humedades = []
-    pm25_vals = []
+    presiones = []
     pm10_vals = []
+    pm25_vals = []
+    pm100_vals = []
 
     # Generar lecturas normales representativas del clima de San Miguel (caluroso)
     # Temperatura típica: 30°C - 34°C
     # Humedad típica: 55% - 65%
-    # PM2.5 típico: 12 - 25 µg/m³
-    # PM10 típico: 20 - 45 µg/m³
+    # Presión típica (BME280): 1008 - 1014 hPa
+    # PM1.0 (pm10) típico: 6 - 15 µg/m³
+    # PM2.5 (pm25) típico: 12 - 25 µg/m³
+    # PM10.0 (pm100) típico: 20 - 45 µg/m³
     for i in range(cantidad_filas):
         tiempo = ahora - timedelta(seconds=(cantidad_filas - i) * 2)
         timestamps.append(tiempo.strftime("%Y-%m-%d %H:%M:%S"))
@@ -145,29 +149,39 @@ def generar_datos_prueba(ruta_destino=RUTA_CSV_DEFAULT, cantidad_filas=150, forz
         # Fluctuaciones suaves
         temp = np.random.normal(loc=31.5, scale=1.2)
         hum = np.random.normal(loc=60.0, scale=3.0)
+        pres = np.random.normal(loc=1011.2, scale=1.5)
+        
         # En condiciones normales, un leve incremento térmico correlaciona con más polvo en suspensión
         pm25 = np.random.normal(loc=18.0 + (temp - 30.0) * 1.5, scale=2.5)
-        pm10 = pm25 * np.random.uniform(1.4, 1.8)
+        pm10 = max(pm25 * 0.6 + np.random.normal(0, 1.0), 1.0)
+        pm100 = pm25 * np.random.uniform(1.4, 1.8)
 
         temperaturas.append(round(temp, 2))
         humedades.append(round(hum, 2))
+        presiones.append(round(pres, 2))
+        pm10_vals.append(round(pm10, 2))
         pm25_vals.append(round(max(pm25, 2.0), 2))
-        pm10_vals.append(round(max(pm10, 5.0), 2))
+        pm100_vals.append(round(max(pm100, 5.0), 2))
 
     # Si se solicita forzar una anomalía en la última lectura:
     if forzar_anomalia_final and cantidad_filas > 0:
-        # Por ejemplo: Temperatura baja repentinamente (20°C) pero polvo se dispara (120 µg/m³),
+        # Por ejemplo: Temperatura baja repentinamente (19.5°C) pero polvo se dispara (135 µg/m³),
         # un desacoplamiento drástico del patrón aprendido
         temperaturas[-1] = 19.5
+        pm10_vals[-1] = 85.0
         pm25_vals[-1] = 135.0
-        pm10_vals[-1] = 210.0
+        pm100_vals[-1] = 210.0
 
+    # Cabeceras exactas sincronizadas con la trama JSON del backend de Gabriel:
+    # timestamp,temperatura,humedad,presion,pm10,pm25,pm100
     df_muestra = pd.DataFrame({
         'timestamp': timestamps,
         'temperatura': temperaturas,
         'humedad': humedades,
+        'presion': presiones,
+        'pm10': pm10_vals,
         'pm25': pm25_vals,
-        'pm10': pm10_vals
+        'pm100': pm100_vals
     })
 
     df_muestra.to_csv(ruta_destino, index=False)
