@@ -130,8 +130,8 @@ def crear_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--port",
-        default=os.environ.get("AIRECENTINELA_PORT", "COM3"),
-        help="Puerto serial del Arduino (predeterminado: COM3 o AIRECENTINELA_PORT).",
+        default=os.environ.get("AIRECENTINELA_PORT", "COM4"),
+        help="Puerto serial del Arduino (predeterminado: COM4 o AIRECENTINELA_PORT).",
     )
     parser.add_argument(
         "--baudrate",
