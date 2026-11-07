@@ -11,9 +11,9 @@ Este script implementa el motor de Inteligencia Artificial no supervisada
 usando el algoritmo Isolation Forest (Bosque de Aislamiento) de scikit-learn.
 
 Su objetivo es analizar el comportamiento conjunto de variables ambientales
-(específicamente 'temperatura' y 'pm25') y determinar de forma autónoma si
-la última lectura registrada representa una condición NORMAL (1) o una
-ANOMALÍA AMBIENTAL (-1).
+(específicamente 'temperatura' y dióxido de carbono equivalente 'eco2') y
+determinar de forma autónoma si la última lectura registrada representa una
+condición NORMAL (1) o una ANOMALÍA AMBIENTAL (-1).
 =============================================================================
 """
 
@@ -45,7 +45,7 @@ def evaluar_anomalia(ruta_csv=RUTA_CSV_DEFAULT, contamination=0.05):
     --------
     int:
          1 -> Estado NORMAL (El aire se comporta según el patrón esperado).
-        -1 -> ANOMALÍA DETECTADA (Lectura inusual o sospechosa en temperatura/polvo).
+        -1 -> ANOMALÍA DETECTADA (Lectura inusual o sospechosa en temperatura/eco2).
     """
 
     # 1. VERIFICACIÓN DE EXISTENCIA DEL ARCHIVO
@@ -59,8 +59,8 @@ def evaluar_anomalia(ruta_csv=RUTA_CSV_DEFAULT, contamination=0.05):
         # Cargamos el archivo CSV en un DataFrame de pandas
         df = pd.read_csv(ruta_csv)
 
-        # Validación: Comprobar que existen las columnas requeridas
-        columnas_requeridas = ['temperatura', 'pm25']
+        # Validación: Comprobar que existen las columnas requeridas ['temperatura', 'eco2']
+        columnas_requeridas = ['temperatura', 'eco2']
         if not all(col in df.columns for col in columnas_requeridas):
             print(f"[IA Engine] Error: El archivo CSV no contiene las columnas necesarias {columnas_requeridas}.")
             return 1
@@ -73,7 +73,7 @@ def evaluar_anomalia(ruta_csv=RUTA_CSV_DEFAULT, contamination=0.05):
             print(f"[IA Engine] Datos insuficientes ({len(df_reciente)} filas). Se requieren al menos 10 filas.")
             return 1
 
-        # Selección de Variables: Extraer ['temperatura', 'pm25'] como matriz de valores NumPy
+        # Selección de Variables: Extraer ['temperatura', 'eco2'] como matriz de valores NumPy
         datos = df_reciente[columnas_requeridas].values
 
         # 3. IMPLEMENTACIÓN DEL MODELO (Librería scikit-learn)
@@ -131,57 +131,46 @@ def generar_datos_prueba(ruta_destino=RUTA_CSV_DEFAULT, cantidad_filas=150, forz
     temperaturas = []
     humedades = []
     presiones = []
-    pm10_vals = []
-    pm25_vals = []
-    pm100_vals = []
+    eco2_vals = []
 
-    # Generar lecturas normales representativas del clima de San Miguel (caluroso)
+    # Generar lecturas normales representativas del entorno universitario:
     # Temperatura típica: 30°C - 34°C
     # Humedad típica: 55% - 65%
     # Presión típica (BME280): 1008 - 1014 hPa
-    # PM1.0 (pm10) típico: 6 - 15 µg/m³
-    # PM2.5 (pm25) típico: 12 - 25 µg/m³
-    # PM10.0 (pm100) típico: 20 - 45 µg/m³
+    # eCO2 Rango Normal: 400 - 800 ppm
     for i in range(cantidad_filas):
         tiempo = ahora - timedelta(seconds=(cantidad_filas - i) * 2)
         timestamps.append(tiempo.strftime("%Y-%m-%d %H:%M:%S"))
 
-        # Fluctuaciones suaves
+        # Fluctuaciones térmicas y de humedad
         temp = np.random.normal(loc=31.5, scale=1.2)
         hum = np.random.normal(loc=60.0, scale=3.0)
         pres = np.random.normal(loc=1011.2, scale=1.5)
-        
-        # En condiciones normales, un leve incremento térmico correlaciona con más polvo en suspensión
-        pm25 = np.random.normal(loc=18.0 + (temp - 30.0) * 1.5, scale=2.5)
-        pm10 = max(pm25 * 0.6 + np.random.normal(0, 1.0), 1.0)
-        pm100 = pm25 * np.random.uniform(1.4, 1.8)
+
+        # eCO2 en rango normal (400 - 800 ppm), con leve correlación a temperatura y presencia
+        base_eco2 = 450.0 + (temp - 30.0) * 25.0
+        eco2 = np.random.normal(loc=base_eco2, scale=35.0)
+        eco2_clamped = max(400.0, min(800.0, eco2))
 
         temperaturas.append(round(temp, 2))
         humedades.append(round(hum, 2))
         presiones.append(round(pres, 2))
-        pm10_vals.append(round(pm10, 2))
-        pm25_vals.append(round(max(pm25, 2.0), 2))
-        pm100_vals.append(round(max(pm100, 5.0), 2))
+        eco2_vals.append(round(eco2_clamped, 2))
 
     # Si se solicita forzar una anomalía en la última lectura:
     if forzar_anomalia_final and cantidad_filas > 0:
-        # Por ejemplo: Temperatura baja repentinamente (19.5°C) pero polvo se dispara (135 µg/m³),
-        # un desacoplamiento drástico del patrón aprendido
+        # Rango de Alerta para eCO2: > 1200 ppm (ej. 1450 ppm)
+        # Desacoplado drásticamente del comportamiento normal
         temperaturas[-1] = 19.5
-        pm10_vals[-1] = 85.0
-        pm25_vals[-1] = 135.0
-        pm100_vals[-1] = 210.0
+        eco2_vals[-1] = 1450.0
 
-    # Cabeceras exactas sincronizadas con la trama JSON del backend de Gabriel:
-    # timestamp,temperatura,humedad,presion,pm10,pm25,pm100
+    # Cabeceras sincronizadas con la variable eCO2
     df_muestra = pd.DataFrame({
         'timestamp': timestamps,
         'temperatura': temperaturas,
         'humedad': humedades,
         'presion': presiones,
-        'pm10': pm10_vals,
-        'pm25': pm25_vals,
-        'pm100': pm100_vals
+        'eco2': eco2_vals
     })
 
     df_muestra.to_csv(ruta_destino, index=False)
@@ -199,8 +188,8 @@ if __name__ == "__main__":
         print("\n[Paso 1] No se encontro 'datos_ambientales.csv'. Generando muestra normal...")
         generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=False)
 
-    # 2. Prueba con lecturas normales
-    print("\n--- TEST 1: Evaluacion con datos en rango normal ---")
+    # 2. Prueba con lecturas normales (eCO2 entre 400 y 800 ppm)
+    print("\n--- TEST 1: Evaluacion con datos en rango normal (eCO2 400-800 ppm) ---")
     resultado = evaluar_anomalia(RUTA_CSV_DEFAULT)
     print(f"Resultado obtenido: {resultado}")
     if resultado == 1:
@@ -208,8 +197,8 @@ if __name__ == "__main__":
     else:
         print("[ALERTA] Diagnostico: ANOMALIA DETECTADA (-1).")
 
-    # 3. Prueba forzando una anomalía en la última lectura
-    print("\n--- TEST 2: Inyectando anomalia ambiental en la ultima lectura ---")
+    # 3. Prueba forzando una anomalía en la última lectura (eCO2 > 1200 ppm)
+    print("\n--- TEST 2: Inyectando anomalia ambiental en la ultima lectura (eCO2 > 1200 ppm) ---")
     generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=True)
     resultado_anomalia = evaluar_anomalia(RUTA_CSV_DEFAULT)
     print(f"Resultado obtenido: {resultado_anomalia}")
