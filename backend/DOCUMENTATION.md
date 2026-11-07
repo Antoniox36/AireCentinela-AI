@@ -28,14 +28,13 @@ El firmware debe enviar un objeto JSON por línea. Los campos requeridos son:
 | `temperatura` | Temperatura reportada por el sensor BME280. |
 | `humedad` | Humedad reportada por el sensor BME280. |
 | `presion` | Presión atmosférica en hPa. |
-| `pm10` | Concentración de partículas PM1.0, según el nombre usado por el firmware. |
-| `pm25` | Concentración de partículas PM2.5. |
-| `pm100` | Concentración de partículas PM10.0. |
+| `eco2` | Concentración equivalente de CO₂ medida por el CCS811, en ppm. |
+| `tvoc` | Concentración de compuestos orgánicos volátiles totales medida por el CCS811, en ppb. |
 
 Ejemplo:
 
 ```json
-{"temperatura":31.5,"humedad":60.0,"presion":1011.2,"pm10":10,"pm25":18,"pm100":30}
+{"temperatura":31.5,"humedad":60.0,"presion":1011.2,"eco2":450,"tvoc":12}
 ```
 
 La trama se acepta únicamente si contiene JSON válido como objeto, incluye
@@ -68,7 +67,7 @@ proporcionar una marca de tiempo explícita, por ejemplo, durante pruebas.
 El orden de columnas del archivo es:
 
 ```text
-timestamp,temperatura,humedad,presion,pm10,pm25,pm100
+timestamp,temperatura,humedad,presion,eco2,tvoc
 ```
 
 El archivo se abre en modo de adición, por lo que las lecturas anteriores se
@@ -138,6 +137,9 @@ python backend/backend_serial.py
   error, en lugar de mezclar formatos.
 - Las tramas de error del firmware, como `{"error":"OLED no encontrada"}`, no
   contienen los campos ambientales requeridos y por ello se ignoran.
+- El firmware debe transmitir `eco2` y `tvoc` además de las tres mediciones del
+  BME280. Si aún envía los campos antiguos de partículas (`pm10`, `pm25`,
+  `pm100`), el backend rechazará esas tramas por no incluir los campos CCS811.
 
 ## Pruebas
 

@@ -11,9 +11,8 @@ LECTURA = {
     "temperatura": 31.5,
     "humedad": 60,
     "presion": 1011.2,
-    "pm10": 10,
-    "pm25": 18,
-    "pm100": 30,
+    "eco2": 450,
+    "tvoc": 12,
 }
 
 
@@ -26,7 +25,7 @@ class ValidarTramaTests(unittest.TestCase):
     def test_rechaza_json_invalido_y_campos_ausentes(self) -> None:
         with self.assertRaisesRegex(ValueError, "JSON válido"):
             validar_trama("{")
-        with self.assertRaisesRegex(ValueError, "pm100"):
+        with self.assertRaisesRegex(ValueError, "tvoc"):
             validar_trama(json.dumps({"temperatura": 30}))
 
     def test_rechaza_valores_no_numericos_y_no_finitos(self) -> None:
@@ -42,6 +41,10 @@ class GuardarLecturaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directorio:
             ruta_csv = Path(directorio) / "subdirectorio" / "datos.csv"
 
+            self.assertEqual(
+                COLUMNAS_CSV,
+                ("timestamp", "temperatura", "humedad", "presion", "eco2", "tvoc"),
+            )
             guardar_lectura(
                 validar_trama(json.dumps(LECTURA)),
                 ruta_csv,
@@ -59,7 +62,8 @@ class GuardarLecturaTests(unittest.TestCase):
             self.assertEqual(tuple(filas[0].keys()), COLUMNAS_CSV)
             self.assertEqual(len(filas), 2)
             self.assertEqual(filas[0]["timestamp"], "2026-11-06 12:00:00")
-            self.assertEqual(filas[1]["pm25"], "18.0")
+            self.assertEqual(filas[1]["eco2"], "450.0")
+            self.assertEqual(filas[1]["tvoc"], "12.0")
 
     def test_rechaza_csv_con_cabecera_incompatible(self) -> None:
         with tempfile.TemporaryDirectory() as directorio:

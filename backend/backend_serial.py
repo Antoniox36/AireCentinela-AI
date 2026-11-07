@@ -15,9 +15,8 @@ COLUMNAS_CSV = (
     "temperatura",
     "humedad",
     "presion",
-    "pm10",
-    "pm25",
-    "pm100",
+    "eco2",
+    "tvoc",
 )
 VARIABLES_AMBIENTALES = COLUMNAS_CSV[1:]
 BAUD_RATE_DEFAULT = 9600
