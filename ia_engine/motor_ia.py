@@ -65,16 +65,36 @@ def evaluar_anomalia(ruta_csv=RUTA_CSV_DEFAULT, contamination=0.05):
             print(f"[IA Engine] Error: El archivo CSV no contiene las columnas necesarias {columnas_requeridas}.")
             return 1
 
-        # Optimización de Memoria: Tomamos únicamente las últimas 150 filas
-        df_reciente = df.tail(150)
+        # Optimización de Memoria: Tomamos las últimas 150 filas
+        df_reciente = df.tail(150).copy()
 
-        # Validación de volumen mínimo de datos para entrenar el modelo
-        if len(df_reciente) < 10:
-            print(f"[IA Engine] Datos insuficientes ({len(df_reciente)} filas). Se requieren al menos 10 filas.")
+        # Validación y Protección contra Fallos de Hardware / Lecturas Corruptas:
+        # Convertimos las columnas a numéricas, transformando tramas corruptas a NaN
+        for col in columnas_requeridas:
+            df_reciente[col] = pd.to_numeric(df_reciente[col], errors='coerce')
+
+        # Evaluación inmediata de la lectura actual (última fila):
+        ultima_temp = df_reciente['temperatura'].iloc[-1]
+        ultimo_eco2 = df_reciente['eco2'].iloc[-1]
+
+        # Si el sensor se desconectó, envió NaN o lecturas físicamente imposibles:
+        # (ej. temperatura fuera de -40°C a 85°C, o eCO2 <= 0 / fuera de escala)
+        if (pd.isna(ultima_temp) or pd.isna(ultimo_eco2) or
+            ultima_temp < -40.0 or ultima_temp > 85.0 or
+            ultimo_eco2 <= 0.0 or ultimo_eco2 > 10000.0):
+            print(f"[IA Engine] ALERTA: Fallo de hardware detectado en la lectura actual (Temp: {ultima_temp}, eCO2: {ultimo_eco2}).")
+            return -1  # Dispara anomalía por desconexión o fallo físico de sensor
+
+        # Limpieza del historial de entrenamiento (descarta filas corruptas intermedias)
+        df_limpio = df_reciente[columnas_requeridas].dropna()
+
+        # Validación de volumen mínimo de datos limpios para entrenar el modelo
+        if len(df_limpio) < 10:
+            print(f"[IA Engine] Datos válidos insuficientes ({len(df_limpio)} filas). Se requieren al menos 10 filas.")
             return 1
 
-        # Selección de Variables: Extraer ['temperatura', 'eco2'] como matriz de valores NumPy
-        datos = df_reciente[columnas_requeridas].values
+        # Selección de Variables: Extraer datos limpios como matriz NumPy
+        datos = df_limpio.values
 
         # 3. IMPLEMENTACIÓN DEL MODELO (Librería scikit-learn)
         # Isolation Forest es un algoritmo NO SUPERVISADO.
@@ -207,7 +227,19 @@ if __name__ == "__main__":
     else:
         print("[INFO] Diagnostico: Clasificado como normal (1).")
 
-    # 4. Restaurar a datos normales para dejar el sistema listo para Fredy y Gabriel
+    # 4. Prueba de tolerancia a fallos de hardware (sensor desconectado / lectura corrupta)
+    print("\n--- TEST 3: Simulando desconexion o fallo de hardware en sensor (-999 / NaN) ---")
+    df_fallo = pd.read_csv(RUTA_CSV_DEFAULT)
+    df_fallo.loc[df_fallo.index[-1], 'eco2'] = -999.0  # Simula sensor desconectado
+    df_fallo.to_csv(RUTA_CSV_DEFAULT, index=False)
+    resultado_fallo = evaluar_anomalia(RUTA_CSV_DEFAULT)
+    print(f"Resultado obtenido: {resultado_fallo}")
+    if resultado_fallo == -1:
+        print("[OK] Diagnostico: PROTECCION ACTIVA! (-1). La IA capturo el fallo fisico sin caerse.")
+    else:
+        print("[INFO] Diagnostico: Clasificado como (1).")
+
+    # 5. Restaurar a datos normales para dejar el sistema listo para Fredy y Gabriel
     print("\n--- Restaurando archivo de datos a condicion normal estandar ---")
     generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=False)
 
