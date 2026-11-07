@@ -29,98 +29,172 @@ RUTA_CSV_DEFAULT = os.path.abspath(
 )
 
 
-def evaluar_anomalia(ruta_csv=RUTA_CSV_DEFAULT, contamination=0.05):
+def calcular_tendencia_eco2(df_limpio):
     """
-    Evalúa la condición actual del aire utilizando el historial reciente.
-
-    Parámetros:
-    -----------
-    ruta_csv : str
-        Ruta absoluta o relativa al archivo CSV generado por el backend.
-    contamination : float (default=0.05)
-        Tasa de sensibilidad de la IA (proporción esperada de anomalías, ej. 5%).
-        Si en la feria se generan muchas falsas alarmas, este valor puede reducirse.
-
+    Analiza la tendencia histórica reciente del eCO2 calculando la tasa de cambio.
+    
     Retorno:
     --------
-    int:
-         1 -> Estado NORMAL (El aire se comporta según el patrón esperado).
-        -1 -> ANOMALÍA DETECTADA (Lectura inusual o sospechosa en temperatura/eco2).
+    dict:
+        'tendencia': 'SUBIENDO_RAPIDO', 'SUBIENDO', 'ESTABLE', 'BAJANDO'
+        'delta_ppm': float (cambio en ppm respecto al inicio de la ventana)
     """
+    if len(df_limpio) < 10:
+        return {'tendencia': 'INSUFICIENTE', 'delta_ppm': 0.0}
 
-    # 1. VERIFICACIÓN DE EXISTENCIA DEL ARCHIVO
+    valores_eco2 = df_limpio['eco2'].values
+    # Comparamos el promedio del primer 20% con el último 20%
+    n_bloque = max(2, len(valores_eco2) // 5)
+    promedio_inicial = valores_eco2[:n_bloque].mean()
+    promedio_final = valores_eco2[-n_bloque:].mean()
+    delta = round(promedio_final - promedio_inicial, 2)
+
+    if delta > 150.0:
+        tendencia = "SUBIENDO_RAPIDO"
+    elif delta > 50.0:
+        tendencia = "SUBIENDO"
+    elif delta < -50.0:
+        tendencia = "BAJANDO"
+    else:
+        tendencia = "ESTABLE"
+
+    return {'tendencia': tendencia, 'delta_ppm': delta}
+
+
+def obtener_diagnostico_completo(ruta_csv=RUTA_CSV_DEFAULT, contamination=0.05):
+    """
+    Proporciona un diagnóstico detallado con niveles de alerta y tendencia histórica,
+    además del resultado binario de la IA (1 o -1).
+
+    Niveles de Alerta:
+    ------------------
+    - 'OPTIMO' (Verde): eCO2 <= 600 ppm y estado normal.
+    - 'ACEPTABLE' (Verde Claro): eCO2 entre 600 y 800 ppm y estado normal.
+    - 'PRECAUCION' (Amarillo): eCO2 entre 800 y 1200 ppm o subida rápida de concentración.
+    - 'CRITICO' (Rojo): eCO2 > 1200 ppm o anomalía severa detectada por Isolation Forest.
+    - 'FALLO_HARDWARE' (Púrpura): Sensor desconectado, valores fuera de rango o corruptos.
+    """
+    # 1. Verificación básica
     if not os.path.exists(ruta_csv):
-        print(f"[IA Engine] Advertencia: No se encontró el archivo '{ruta_csv}'.")
-        # Retorno seguro por defecto: normal (1) para no detener la interfaz
-        return 1
+        return {
+            'estado_ia': 1,
+            'nivel_alerta': 'SIN_DATOS',
+            'mensaje': f"No se encontró el archivo '{ruta_csv}'",
+            'temperatura': None,
+            'eco2': None,
+            'tendencia': 'DESCONOCIDA'
+        }
 
     try:
-        # 2. MANEJO Y PREPARACIÓN DE DATOS (Librería pandas)
-        # Cargamos el archivo CSV en un DataFrame de pandas
         df = pd.read_csv(ruta_csv)
-
-        # Validación: Comprobar que existen las columnas requeridas ['temperatura', 'eco2']
         columnas_requeridas = ['temperatura', 'eco2']
         if not all(col in df.columns for col in columnas_requeridas):
-            print(f"[IA Engine] Error: El archivo CSV no contiene las columnas necesarias {columnas_requeridas}.")
-            return 1
+            return {
+                'estado_ia': 1,
+                'nivel_alerta': 'ERROR_ESQUEMA',
+                'mensaje': f"Faltan columnas requeridas {columnas_requeridas}",
+                'temperatura': None,
+                'eco2': None,
+                'tendencia': 'DESCONOCIDA'
+            }
 
-        # Optimización de Memoria: Tomamos las últimas 150 filas
         df_reciente = df.tail(150).copy()
-
-        # Validación y Protección contra Fallos de Hardware / Lecturas Corruptas:
-        # Convertimos las columnas a numéricas, transformando tramas corruptas a NaN
         for col in columnas_requeridas:
             df_reciente[col] = pd.to_numeric(df_reciente[col], errors='coerce')
 
-        # Evaluación inmediata de la lectura actual (última fila):
         ultima_temp = df_reciente['temperatura'].iloc[-1]
         ultimo_eco2 = df_reciente['eco2'].iloc[-1]
 
-        # Si el sensor se desconectó, envió NaN o lecturas físicamente imposibles:
-        # (ej. temperatura fuera de -40°C a 85°C, o eCO2 <= 0 / fuera de escala)
+        # Detección de fallo físico en hardware / desconexión
         if (pd.isna(ultima_temp) or pd.isna(ultimo_eco2) or
             ultima_temp < -40.0 or ultima_temp > 85.0 or
             ultimo_eco2 <= 0.0 or ultimo_eco2 > 10000.0):
-            print(f"[IA Engine] ALERTA: Fallo de hardware detectado en la lectura actual (Temp: {ultima_temp}, eCO2: {ultimo_eco2}).")
-            return -1  # Dispara anomalía por desconexión o fallo físico de sensor
+            return {
+                'estado_ia': -1,
+                'nivel_alerta': 'FALLO_HARDWARE',
+                'mensaje': "Desconexión o lectura física fuera de rango",
+                'temperatura': ultima_temp,
+                'eco2': ultimo_eco2,
+                'tendencia': 'ERROR',
+                'delta_ppm': 0.0
+            }
 
-        # Limpieza del historial de entrenamiento (descarta filas corruptas intermedias)
         df_limpio = df_reciente[columnas_requeridas].dropna()
-
-        # Validación de volumen mínimo de datos limpios para entrenar el modelo
         if len(df_limpio) < 10:
-            print(f"[IA Engine] Datos válidos insuficientes ({len(df_limpio)} filas). Se requieren al menos 10 filas.")
-            return 1
+            return {
+                'estado_ia': 1,
+                'nivel_alerta': 'CALIBRANDO',
+                'mensaje': f"Historial insuficiente ({len(df_limpio)} filas)",
+                'temperatura': ultima_temp,
+                'eco2': ultimo_eco2,
+                'tendencia': 'CALIBRANDO',
+                'delta_ppm': 0.0
+            }
 
-        # Selección de Variables: Extraer datos limpios como matriz NumPy
+        # Modelo Isolation Forest
         datos = df_limpio.values
-
-        # 3. IMPLEMENTACIÓN DEL MODELO (Librería scikit-learn)
-        # Isolation Forest es un algoritmo NO SUPERVISADO.
-        # Asume que las anomalías son pocas y con valores aislados.
-        # random_state=42 asegura que los resultados sean reproducibles en la demostración.
         modelo = IsolationForest(
             contamination=contamination,
             random_state=42,
             n_estimators=100
         )
-
-        # Entrenamiento: La IA analiza el historial reciente y aprende qué es "normal"
         modelo.fit(datos)
-
-        # Predicción: Califica cada una de las filas (devuelve un array de 1 y -1)
         predicciones = modelo.predict(datos)
+        estado_ia = int(predicciones[-1])
 
-        # 4. EXTRACCIÓN DEL RETORNO MATEMÁTICO (El Entregable)
-        # Tomamos el último elemento de la lista (índice [-1]), que corresponde a la lectura actual
-        ultimo_estado = int(predicciones[-1])
+        # Análisis de Tendencia Histórica
+        info_tendencia = calcular_tendencia_eco2(df_limpio)
+        tendencia = info_tendencia['tendencia']
+        delta_ppm = info_tendencia['delta_ppm']
 
-        return ultimo_estado
+        # Clasificación por Niveles de Alerta Personalizados
+        if estado_ia == -1 or ultimo_eco2 > 1200.0:
+            nivel = 'CRITICO'
+            mensaje = f"Alerta ambiental crítica: eCO2 en {ultimo_eco2} ppm"
+        elif ultimo_eco2 > 800.0 or tendencia == "SUBIENDO_RAPIDO":
+            nivel = 'PRECAUCION'
+            mensaje = f"Precaución: eCO2 elevado ({ultimo_eco2} ppm) o acumulación acelerada (+{delta_ppm} ppm)"
+        elif ultimo_eco2 > 600.0:
+            nivel = 'ACEPTABLE'
+            mensaje = f"Calidad aceptable: eCO2 en {ultimo_eco2} ppm"
+        else:
+            nivel = 'OPTIMO'
+            mensaje = f"Ambiente óptimo y ventilado: eCO2 en {ultimo_eco2} ppm"
+
+        return {
+            'estado_ia': estado_ia,
+            'nivel_alerta': nivel,
+            'mensaje': mensaje,
+            'temperatura': ultima_temp,
+            'eco2': ultimo_eco2,
+            'tendencia': tendencia,
+            'delta_ppm': delta_ppm
+        }
 
     except Exception as e:
-        print(f"[IA Engine] Excepción al procesar la IA: {e}")
-        return 1
+        return {
+            'estado_ia': 1,
+            'nivel_alerta': 'ERROR_SISTEMA',
+            'mensaje': str(e),
+            'temperatura': None,
+            'eco2': None,
+            'tendencia': 'DESCONOCIDA'
+        }
+
+
+def evaluar_anomalia(ruta_csv=RUTA_CSV_DEFAULT, contamination=0.05):
+    """
+    Evalúa la condición actual del aire utilizando el historial reciente.
+    Mantiene compatibilidad total con la firma estándar para Fredy (retorna 1 o -1).
+
+    Retorno:
+    --------
+    int:
+         1 -> Estado NORMAL (Ambiente seguro y en rango).
+        -1 -> ANOMALÍA DETECTADA (Fallo ambiental o físico).
+    """
+    diagnostico = obtener_diagnostico_completo(ruta_csv, contamination)
+    return diagnostico['estado_ia']
 
 
 def generar_datos_prueba(ruta_destino=RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=False):
@@ -203,10 +277,8 @@ if __name__ == "__main__":
     print(">> EJECUCION DE PRUEBAS DEL MOTOR DE IA -- AIRECENTINELA AI <<")
     print("=" * 65)
 
-    # 1. Comprobar si existe el archivo CSV; si no existe, generarlo
-    if not os.path.exists(RUTA_CSV_DEFAULT):
-        print("\n[Paso 1] No se encontro 'datos_ambientales.csv'. Generando muestra normal...")
-        generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=False)
+    # 1. Asegurar archivo CSV con datos normales de partida
+    generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=False)
 
     # 2. Prueba con lecturas normales (eCO2 entre 400 y 800 ppm)
     print("\n--- TEST 1: Evaluacion con datos en rango normal (eCO2 400-800 ppm) ---")
@@ -239,7 +311,17 @@ if __name__ == "__main__":
     else:
         print("[INFO] Diagnostico: Clasificado como (1).")
 
-    # 5. Restaurar a datos normales para dejar el sistema listo para Fredy y Gabriel
+    # 5. Prueba de diagnóstico completo (Nivel de Alerta y Tendencia Histórica)
+    print("\n--- TEST 4: Evaluacion de diagnostico detallado y tendencia historica ---")
+    generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=False)
+    diag = obtener_diagnostico_completo(RUTA_CSV_DEFAULT)
+    print(f"Estado IA: [{diag['estado_ia']}]")
+    print(f"Nivel de Alerta: [{diag['nivel_alerta']}]")
+    print(f"Tendencia Historica: [{diag['tendencia']}] (Variacion: {diag['delta_ppm']} ppm)")
+    print(f"Mensaje Descriptivo: {diag['mensaje']}")
+    print("[OK] Diagnostico detallado completado.")
+
+    # 6. Restaurar a datos normales para dejar el sistema listo para Fredy y Gabriel
     print("\n--- Restaurando archivo de datos a condicion normal estandar ---")
     generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=False)
 

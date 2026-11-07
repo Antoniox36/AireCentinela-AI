@@ -114,28 +114,40 @@ def evaluar_anomalia(ruta_csv=..., contamination=0.05) -> int:
 
 ### Significado de los Códigos de Retorno:
 * **`1` (Estado Normal):** La última lectura (`temperatura`, `eco2`) coincide con el patrón de agrupamiento aprendido.
-* **`-1` (Anomalía Detectada):** La última lectura se desvía drásticamente del comportamiento correlacionado (ejemplo: eCO2 disparado a $1450\text{ ppm}$).
+* **`-1` (Anomalía Detectada):** La última lectura se desvía drásticamente del comportamiento correlacionado (ejemplo: eCO2 disparado a $1450\text{ ppm}$) o presenta un fallo de hardware.
+
+### Diagnóstico Extendido y Tendencia Histórica:
+Para visualizaciones avanzadas o alertas personalizadas, el motor expone:
+```python
+def obtener_diagnostico_completo(ruta_csv=..., contamination=0.05) -> dict:
+```
+Retorna un diccionario completo con:
+* **`nivel_alerta`:**
+  * `'OPTIMO'`: eCO2 $\le 600\text{ ppm}$ y modelo normal.
+  * `'ACEPTABLE'`: eCO2 entre $600 - 800\text{ ppm}$ y modelo normal.
+  * `'PRECAUCION'`: eCO2 entre $800 - 1200\text{ ppm}$ o acumulación rápida de gas.
+  * `'CRITICO'`: eCO2 $> 1200\text{ ppm}$ o anomalía severa.
+  * `'FALLO_HARDWARE'`: Sensor desconectado, valores NaN o fuera de escala física.
+* **`tendencia`:** Tasa de cambio histórica (`'SUBIENDO_RAPIDO'`, `'SUBIENDO'`, `'ESTABLE'`, `'BAJANDO'`).
+* **`delta_ppm`:** Variación numérica en ppm respecto al inicio de la ventana.
 
 ### Integración con el Frontend de Fredy (`frontend/app_airecentinela.py`):
 ```python
-from ia_engine.motor_ia import evaluar_anomalia
+from ia_engine.motor_ia import evaluar_anomalia, obtener_diagnostico_completo
 
-# Llamada en el bucle del dashboard:
+# Uso simple (indicador Verde/Rojo):
 estado = evaluar_anomalia()
 
-if estado == 1:
-    # Mostrar luz/indicador VERDE en PyQt6
-    pass
-elif estado == -1:
-    # Mostrar luz/indicador ROJO y activar alerta
-    pass
+# Uso avanzado (niveles y tendencia):
+diagnostico = obtener_diagnostico_completo()
+print(diagnostico['nivel_alerta'], diagnostico['tendencia'])
 ```
 
 ---
 
 ## 🧪 7. Pruebas y Verificación
 
-Para ejecutar la suite de pruebas locales que valida tanto datos normales como inyección de anomalías:
+Para ejecutar la suite de pruebas locales que valida el modelo, los fallos físicos y las tendencias:
 
 ```powershell
 py -3.13 ia_engine/motor_ia.py
@@ -146,4 +158,6 @@ La suite ejecutará:
 1. Comprobación y creación de `data/datos_ambientales.csv` si no existe.
 2. **Test 1:** Evaluación con datos en rango normal de eCO2 ($400 - 800\text{ ppm}$) (esperado: `1`).
 3. **Test 2:** Inyección de lectura extrema con eCO2 $> 1200\text{ ppm}$ en la última fila (esperado: `-1`).
-4. Restauración del CSV a estado normal para que Fredy y Gabriel puedan continuar sus pruebas.
+4. **Test 3:** Simulación de sensor desconectado o trama corrupta (esperado: `-1` con protección activa).
+5. **Test 4:** Cálculo de tendencia histórica (`delta_ppm`) y categorización de nivel de alerta.
+6. Restauración del CSV a estado normal para que Fredy y Gabriel puedan continuar sus pruebas.
