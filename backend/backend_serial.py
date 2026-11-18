@@ -7,6 +7,7 @@ import json
 import math
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +21,7 @@ COLUMNAS_CSV = (
 )
 VARIABLES_AMBIENTALES = COLUMNAS_CSV[1:]
 BAUD_RATE_DEFAULT = 9600
+PUERTO_DEFAULT = "COM6"
 RUTA_CSV_DEFAULT = (
     Path(__file__).resolve().parent.parent / "data" / "datos_ambientales.csv"
 )
@@ -39,6 +41,9 @@ def validar_trama(trama: bytes | str) -> dict[str, float]:
 
     if not isinstance(datos, dict):
         raise ValueError("el JSON debe ser un objeto")
+
+    if "error" in datos:
+        raise ValueError(f"reporte del firmware: {datos['error']}")
 
     faltantes = [campo for campo in VARIABLES_AMBIENTALES if campo not in datos]
     if faltantes:
@@ -60,10 +65,10 @@ def validar_trama(trama: bytes | str) -> dict[str, float]:
     return lectura
 
 
-def preparar_csv(ruta_csv: Path) -> None:
-    """Crea el directorio y cabecera, o verifica el esquema del CSV existente."""
+def preparar_csv(ruta_csv: Path, reiniciar: bool = False) -> None:
+    """Crea o reinicia el CSV con la cabecera oficial del proyecto."""
     ruta_csv.parent.mkdir(parents=True, exist_ok=True)
-    if not ruta_csv.exists() or ruta_csv.stat().st_size == 0:
+    if reiniciar or not ruta_csv.exists() or ruta_csv.stat().st_size == 0:
         with ruta_csv.open("w", newline="", encoding="utf-8") as salida:
             csv.writer(salida).writerow(COLUMNAS_CSV)
         return
@@ -94,16 +99,48 @@ def guardar_lectura(
         salida.flush()
 
 
-def recibir_datos(port: str, baudrate: int, ruta_csv: Path) -> None:
-    """Escucha el puerto serial y persiste las tramas JSON válidas."""
+def _cargar_pyserial():
     try:
-        serial = importlib.import_module("serial")
+        return importlib.import_module("serial")
     except ModuleNotFoundError as error:
         if error.name != "serial":
             raise
         raise RuntimeError(
             "Falta pyserial; instálalo con 'python -m pip install pyserial'."
         ) from error
+
+
+def verificar_sensores(port: str, baudrate: int, timeout_segundos: int = 10) -> bool:
+    """Comprueba que el Arduino responde con al menos una trama válida de ambos sensores."""
+    serial = _cargar_pyserial()
+    print(f"[Verificación] Conectando a {port} ({baudrate} baudios)...")
+    inicio = time.monotonic()
+
+    with serial.Serial(port=port, baudrate=baudrate, timeout=1) as conexion:
+        while time.monotonic() - inicio < timeout_segundos:
+            trama = conexion.readline()
+            if not trama:
+                continue
+            try:
+                lectura = validar_trama(trama)
+                print(f"[OK] Sensores activos y respondiendo: {lectura}")
+                return True
+            except ValueError as error:
+                print(f"[Espera] {error}")
+
+    print(
+        "[ERROR] Tiempo agotado sin recibir datos válidos de los sensores.",
+        file=sys.stderr,
+    )
+    return False
+
+
+def recibir_datos(
+    port: str, baudrate: int, ruta_csv: Path, limpiar_csv: bool = False
+) -> None:
+    """Escucha el puerto serial y persiste las tramas JSON válidas."""
+    serial = _cargar_pyserial()
+    preparar_csv(ruta_csv, reiniciar=limpiar_csv)
 
     print(f"[Backend] Escuchando {port} a {baudrate} baudios.")
     print(f"[Backend] Historial: {ruta_csv}")
@@ -120,7 +157,12 @@ def recibir_datos(port: str, baudrate: int, ruta_csv: Path) -> None:
                 continue
 
             guardar_lectura(lectura, ruta_csv)
-            print("[Backend] Lectura guardada.")
+            print(
+                f"[Backend] [{datetime.now().strftime('%H:%M:%S')}] "
+                f"T={lectura['temperatura']}°C | H={lectura['humedad']}% | "
+                f"P={lectura['presion']}hPa | eCO2={lectura['eco2']:.0f}ppm | "
+                f"TVOC={lectura['tvoc']:.0f}ppb"
+            )
 
 
 def crear_parser() -> argparse.ArgumentParser:
@@ -129,8 +171,8 @@ def crear_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--port",
-        default=os.environ.get("AIRECENTINELA_PORT", "COM4"),
-        help="Puerto serial del Arduino (predeterminado: COM4 o AIRECENTINELA_PORT).",
+        default=os.environ.get("AIRECENTINELA_PORT", PUERTO_DEFAULT),
+        help=f"Puerto serial del Arduino (predeterminado: {PUERTO_DEFAULT}).",
     )
     parser.add_argument(
         "--baudrate",
@@ -144,13 +186,25 @@ def crear_parser() -> argparse.ArgumentParser:
         default=RUTA_CSV_DEFAULT,
         help=f"Ruta del historial CSV (predeterminada: {RUTA_CSV_DEFAULT}).",
     )
+    parser.add_argument(
+        "--verificar",
+        action="store_true",
+        help="Verifica durante 10s que los sensores envían tramas válidas y sale.",
+    )
+    parser.add_argument(
+        "--limpiar",
+        action="store_true",
+        help="Borra lecturas anteriores del CSV antes de comenzar a grabar.",
+    )
     return parser
 
 
 def main() -> int:
     args = crear_parser().parse_args()
     try:
-        recibir_datos(args.port, args.baudrate, args.csv)
+        if args.verificar:
+            return 0 if verificar_sensores(args.port, args.baudrate) else 1
+        recibir_datos(args.port, args.baudrate, args.csv, limpiar_csv=args.limpiar)
     except KeyboardInterrupt:
         print("\n[Backend] Recepción detenida por el usuario.")
         return 0

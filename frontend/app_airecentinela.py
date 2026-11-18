@@ -4,7 +4,6 @@ import sys
 import os
 import pandas as pd
 
-# Asegurar que reconozca el directorio raíz para importar el motor_ia.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from ia_engine.motor_ia import obtener_diagnostico_completo
@@ -28,7 +27,7 @@ RUTA_CSV = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'data', 'datos_ambientales.csv')
 )
 COLUMNAS_CSV = ('timestamp', 'temperatura', 'humedad', 'presion', 'eco2', 'tvoc')
-INTERVALO_ACTUALIZACION_MS = 3000
+INTERVALO_ACTUALIZACION_MS = 1000
 
 FONDO = '#0B1220'
 TARJETA = '#151F30'
@@ -120,13 +119,15 @@ class GraficaECO2(FigureCanvasQTAgg):
         self.draw_idle()
 
     def actualizar(self, datos_csv):
+        reciente = datos_csv.tail(120)
         historico = pd.DataFrame({
-            'fecha': pd.to_datetime(datos_csv['timestamp'], errors='coerce'),
-            'eco2': pd.to_numeric(datos_csv['eco2'], errors='coerce'),
-        }).dropna().sort_values('fecha')
+            'fecha': pd.to_datetime(reciente['timestamp'], errors='coerce'),
+            'eco2': pd.to_numeric(reciente['eco2'], errors='coerce'),
+        }).dropna()
+        historico = historico[historico['eco2'] > 0].sort_values('fecha')
 
         if historico.empty:
-            self.mostrar_mensaje('No hay lecturas válidas para graficar.')
+            self.mostrar_mensaje('Esperando lecturas válidas de eCO2...')
             return
 
         self._preparar_ejes()
@@ -135,7 +136,7 @@ class GraficaECO2(FigureCanvasQTAgg):
             historico['eco2'].to_numpy(),
             color=CIAN,
             linewidth=2.2,
-            marker='o' if len(historico) <= 40 else None,
+            marker='o' if len(historico) <= 60 else None,
             markersize=3.5,
         )
         localizador = mdates.AutoDateLocator(minticks=3, maxticks=8)
@@ -164,7 +165,6 @@ class VentanaAireCentinela(QMainWindow):
         layout_principal.setContentsMargins(30, 30, 30, 30)
         layout_principal.setSpacing(25)
 
-        # 1. Panel Superior y Semáforo de IA
         panel_superior = QHBoxLayout()
         titulo = QLabel('Monitoreo en Tiempo Real')
         titulo.setStyleSheet(f'color: {TEXTO}; font-size: 26px; font-weight: 800;')
@@ -181,7 +181,6 @@ class VentanaAireCentinela(QMainWindow):
         panel_superior.addWidget(self.etiqueta_ia)
         layout_principal.addLayout(panel_superior)
 
-        # 2. Panel de Tarjetas de Métricas
         grid_metricas = QGridLayout()
         grid_metricas.setSpacing(20)
 
@@ -190,7 +189,7 @@ class VentanaAireCentinela(QMainWindow):
             'humedad': TarjetaMetrica('Humedad', '%', '#48BB78'),
             'presion': TarjetaMetrica('Presión', 'hPa', '#A0AEC0', decimales=2),
             'eco2': TarjetaMetrica('eCO2 (Gas)', 'ppm', CIAN, decimales=0, destacada=True),
-            'tvoc': TarjetaMetrica('TVOC', 'ppb', '#ED8936', decimales=0)
+            'tvoc': TarjetaMetrica('TVOC', 'ppb', '#ED8936', decimales=0),
         }
 
         grid_metricas.addWidget(self.tarjetas['temperatura'], 0, 0)
@@ -201,11 +200,9 @@ class VentanaAireCentinela(QMainWindow):
 
         layout_principal.addLayout(grid_metricas)
 
-        # 3. Lienzo de Gráfica Histórica
         self.grafica = GraficaECO2()
         layout_principal.addWidget(self.grafica, stretch=1)
 
-        # 4. Hilo de Actualización
         self.temporizador = QTimer(self)
         self.temporizador.timeout.connect(self._actualizar_datos)
         self.temporizador.start(INTERVALO_ACTUALIZACION_MS)
@@ -220,16 +217,13 @@ class VentanaAireCentinela(QMainWindow):
             if df.empty:
                 return
 
-            # Actualizar tarjetas visuales
             ultima_fila = df.iloc[-1]
             for columna, tarjeta in self.tarjetas.items():
                 if columna in ultima_fila:
                     tarjeta.actualizar(ultima_fila[columna])
 
-            # Actualizar gráfica
             self.grafica.actualizar(df)
 
-            # Integración con IA de Samuel
             diagnostico = obtener_diagnostico_completo(ruta_csv=RUTA_CSV)
             nivel = diagnostico.get('nivel_alerta', 'DESCONOCIDA')
             mensaje = diagnostico.get('mensaje', 'Sin conexión a IA')
@@ -237,15 +231,14 @@ class VentanaAireCentinela(QMainWindow):
 
             texto_mostrar = f"{nivel} | {tendencia}\n{mensaje}"
 
-            # Control de colores del semáforo IA
             if nivel in ['OPTIMO', 'ACEPTABLE']:
-                fondo_ia, texto_ia = '#22543D', '#9AE6B4' # Verde
+                fondo_ia, texto_ia = '#22543D', '#9AE6B4'
             elif nivel == 'PRECAUCION':
-                fondo_ia, texto_ia = '#744210', '#FBD38D' # Amarillo
+                fondo_ia, texto_ia = '#744210', '#FBD38D'
             elif nivel == 'CRITICO':
-                fondo_ia, texto_ia = '#742A2A', '#FEB2B2' # Rojo
+                fondo_ia, texto_ia = '#742A2A', '#FEB2B2'
             else:
-                fondo_ia, texto_ia = BORDE, TEXTO         # Gris
+                fondo_ia, texto_ia = BORDE, TEXTO
 
             self.etiqueta_ia.setText(texto_mostrar)
             self.etiqueta_ia.setStyleSheet(
