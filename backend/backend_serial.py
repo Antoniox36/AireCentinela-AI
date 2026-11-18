@@ -1,4 +1,4 @@
-"""Receptor serial del firmware de AireCentinela AI."""
+"""Receptor serial bidireccional del firmware de AireCentinela AI."""
 
 import argparse
 import csv
@@ -10,6 +10,9 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from ia_engine.motor_ia import obtener_diagnostico_completo
 
 COLUMNAS_CSV = (
     "timestamp",
@@ -138,11 +141,11 @@ def verificar_sensores(port: str, baudrate: int, timeout_segundos: int = 10) -> 
 def recibir_datos(
     port: str, baudrate: int, ruta_csv: Path, limpiar_csv: bool = False
 ) -> None:
-    """Escucha el puerto serial y persiste las tramas JSON válidas."""
+    """Escucha el puerto serial, persiste las tramas y envía al Arduino el veredicto de la IA."""
     serial = _cargar_pyserial()
     preparar_csv(ruta_csv, reiniciar=limpiar_csv)
 
-    print(f"[Backend] Escuchando {port} a {baudrate} baudios.")
+    print(f"[Backend] Escuchando {port} a {baudrate} baudios (control bidireccional IA activo).")
     print(f"[Backend] Historial: {ruta_csv}")
 
     with serial.Serial(port=port, baudrate=baudrate, timeout=1) as conexion:
@@ -157,17 +160,23 @@ def recibir_datos(
                 continue
 
             guardar_lectura(lectura, ruta_csv)
+            diagnostico = obtener_diagnostico_completo(str(ruta_csv))
+            comando = diagnostico.get("comando_arduino", b"0\n")
+            conexion.write(comando)
+            conexion.flush()
+
             print(
                 f"[Backend] [{datetime.now().strftime('%H:%M:%S')}] "
                 f"T={lectura['temperatura']}°C | H={lectura['humedad']}% | "
                 f"P={lectura['presion']}hPa | eCO2={lectura['eco2']:.0f}ppm | "
-                f"TVOC={lectura['tvoc']:.0f}ppb"
+                f"TVOC={lectura['tvoc']:.0f}ppb -> IA: {diagnostico['nivel_alerta']} "
+                f"(CMD: {comando.decode().strip()})"
             )
 
 
 def crear_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Recibe lecturas JSON del Arduino y las guarda en un CSV."
+        description="Recibe lecturas JSON del Arduino y coordina alertas con el Motor IA."
     )
     parser.add_argument(
         "--port",

@@ -10,24 +10,30 @@ from sklearn.ensemble import IsolationForest
 RUTA_CSV_DEFAULT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "data", "datos_ambientales.csv")
 )
+FEATURES_IA = ["temperatura", "humedad", "presion", "eco2", "tvoc"]
+
+# Márgenes estándar relativos sobre la línea base aprendida de cada zona (en ppm)
+MARGEN_PRECAUCION_PPM = 200.0
+MARGEN_ALERTA_PPM = 450.0
+MARGEN_CRITICO_PPM = 800.0
 
 
-def calcular_tendencia_eco2(df_limpio: pd.DataFrame) -> dict:
+def calcular_tendencia_eco2(serie_eco2: pd.Series) -> dict:
     """Calcula la variación de eCO2 entre el inicio y el final de la ventana reciente."""
-    if len(df_limpio) < 10:
+    if len(serie_eco2) < 15:
         return {"tendencia": "INSUFICIENTE", "delta_ppm": 0.0}
 
-    valores_eco2 = df_limpio["eco2"].values
-    n_bloque = max(2, len(valores_eco2) // 5)
-    promedio_inicial = valores_eco2[:n_bloque].mean()
-    promedio_final = valores_eco2[-n_bloque:].mean()
+    valores = serie_eco2.values
+    n_bloque = max(3, len(valores) // 5)
+    promedio_inicial = valores[:n_bloque].mean()
+    promedio_final = valores[-n_bloque:].mean()
     delta = round(float(promedio_final - promedio_inicial), 2)
 
-    if delta > 150.0:
+    if delta > 200.0:
         tendencia = "SUBIENDO_RAPIDO"
-    elif delta > 50.0:
+    elif delta > 75.0:
         tendencia = "SUBIENDO"
-    elif delta < -50.0:
+    elif delta < -75.0:
         tendencia = "BAJANDO"
     else:
         tendencia = "ESTABLE"
@@ -36,9 +42,9 @@ def calcular_tendencia_eco2(df_limpio: pd.DataFrame) -> dict:
 
 
 def obtener_diagnostico_completo(
-    ruta_csv: str = RUTA_CSV_DEFAULT, contamination: float = 0.03
+    ruta_csv: str = RUTA_CSV_DEFAULT, contamination: float = 0.05
 ) -> dict:
-    """Evalúa la última lectura con Isolation Forest y devuelve nivel de alerta y tendencia."""
+    """Evalúa el estado ambiental combinando Isolation Forest y márgenes relativos sobre la línea base."""
     if not os.path.exists(ruta_csv):
         return {
             "estado_ia": 1,
@@ -48,35 +54,37 @@ def obtener_diagnostico_completo(
             "eco2": None,
             "tendencia": "DESCONOCIDA",
             "delta_ppm": 0.0,
+            "comando_arduino": b"0\n",
         }
 
     try:
         df = pd.read_csv(ruta_csv)
-        columnas_requeridas = ["temperatura", "eco2"]
-        if not all(col in df.columns for col in columnas_requeridas):
+        if not all(col in df.columns for col in FEATURES_IA):
             return {
                 "estado_ia": 1,
                 "nivel_alerta": "ERROR_ESQUEMA",
-                "mensaje": f"Faltan columnas requeridas {columnas_requeridas}",
+                "mensaje": f"Faltan columnas requeridas {FEATURES_IA}",
                 "temperatura": None,
                 "eco2": None,
                 "tendencia": "DESCONOCIDA",
                 "delta_ppm": 0.0,
+                "comando_arduino": b"0\n",
             }
 
         if df.empty:
             return {
                 "estado_ia": 1,
                 "nivel_alerta": "SIN_DATOS",
-                "mensaje": "El archivo CSV aún no contiene lecturas",
+                "mensaje": "Esperando primeras tramas del sensor",
                 "temperatura": None,
                 "eco2": None,
                 "tendencia": "DESCONOCIDA",
                 "delta_ppm": 0.0,
+                "comando_arduino": b"0\n",
             }
 
         df_reciente = df.tail(150).copy()
-        for col in columnas_requeridas:
+        for col in FEATURES_IA:
             df_reciente[col] = pd.to_numeric(df_reciente[col], errors="coerce")
 
         ultima_temp = df_reciente["temperatura"].iloc[-1]
@@ -88,7 +96,7 @@ def obtener_diagnostico_completo(
             or ultima_temp < -40.0
             or ultima_temp > 85.0
             or ultimo_eco2 <= 0.0
-            or ultimo_eco2 > 10000.0
+            or ultimo_eco2 > 20000.0
         ):
             return {
                 "estado_ia": -1,
@@ -98,58 +106,75 @@ def obtener_diagnostico_completo(
                 "eco2": ultimo_eco2,
                 "tendencia": "ERROR",
                 "delta_ppm": 0.0,
+                "comando_arduino": b"0\n",
             }
 
-        df_limpio = df_reciente[columnas_requeridas].dropna()
-        if len(df_limpio) < 10:
+        df_limpio = df_reciente[FEATURES_IA].dropna().copy()
+
+        if len(df_limpio) < 15:
             return {
                 "estado_ia": 1,
                 "nivel_alerta": "CALIBRANDO",
-                "mensaje": f"Calibrando modelo ({len(df_limpio)}/10 lecturas)",
+                "mensaje": f"Aprendiendo línea base de la zona ({len(df_limpio)}/15)",
                 "temperatura": float(ultima_temp),
                 "eco2": float(ultimo_eco2),
                 "tendencia": "CALIBRANDO",
                 "delta_ppm": 0.0,
+                "comando_arduino": b"0\n",
             }
 
-        datos = df_limpio.values
+        matriz_features = df_limpio[FEATURES_IA].values
         modelo = IsolationForest(
             contamination=contamination, random_state=42, n_estimators=100
         )
-        modelo.fit(datos)
-        estado_ia = int(modelo.predict(datos)[-1])
+        modelo.fit(matriz_features)
 
-        info_tendencia = calcular_tendencia_eco2(df_limpio)
+        estado_ia = int(modelo.predict(matriz_features)[-1])
+        eco2_actual = float(ultimo_eco2)
+        mediana_zona = float(df_limpio["eco2"].median())
+        exceso_sobre_base = eco2_actual - mediana_zona
+
+        info_tendencia = calcular_tendencia_eco2(df_limpio["eco2"])
         tendencia = info_tendencia["tendencia"]
         delta_ppm = info_tendencia["delta_ppm"]
 
-        if ultimo_eco2 > 1000.0 or (estado_ia == -1 and ultimo_eco2 > 800.0):
+        # Escala progresiva estándar relativa a la línea base de la zona + veredicto IA
+        if exceso_sobre_base >= MARGEN_CRITICO_PPM:
             nivel = "CRITICO"
-            mensaje = f"Alerta ambiental crítica: eCO2 en {ultimo_eco2:.0f} ppm"
-        elif (
-            ultimo_eco2 > 750.0
-            or tendencia == "SUBIENDO_RAPIDO"
-            or (estado_ia == -1 and ultimo_eco2 > 550.0)
+            comando = b"3\n"  # Pitido continuo
+            mensaje = (
+                f"CRÍTICO: {eco2_actual:.0f} ppm (+{exceso_sobre_base:.0f} sobre base {mediana_zona:.0f})"
+            )
+        elif exceso_sobre_base >= MARGEN_ALERTA_PPM and estado_ia == -1:
+            nivel = "CRITICO"
+            comando = b"2\n"  # Pulso rápido
+            mensaje = (
+                f"Anomalía alta: {eco2_actual:.0f} ppm (base {mediana_zona:.0f} ppm)"
+            )
+        elif exceso_sobre_base >= MARGEN_PRECAUCION_PPM or (
+            estado_ia == -1 and exceso_sobre_base > 100.0
         ):
             nivel = "PRECAUCION"
+            comando = b"1\n"  # Pulso lento
             mensaje = (
-                f"Precaución: variación atípica o acumulación ({ultimo_eco2:.0f} ppm)"
+                f"Precaución: {eco2_actual:.0f} ppm (+{exceso_sobre_base:.0f} sobre base)"
             )
-        elif ultimo_eco2 > 600.0:
-            nivel = "ACEPTABLE"
-            mensaje = f"Calidad aceptable: eCO2 en {ultimo_eco2:.0f} ppm"
         else:
             nivel = "OPTIMO"
-            mensaje = f"Ambiente óptimo y ventilado: eCO2 en {ultimo_eco2:.0f} ppm"
+            comando = b"0\n"  # Silencio
+            mensaje = (
+                f"Patrón normal de la zona (base ~{mediana_zona:.0f} ppm)"
+            )
 
         return {
             "estado_ia": estado_ia,
             "nivel_alerta": nivel,
             "mensaje": mensaje,
             "temperatura": float(ultima_temp),
-            "eco2": float(ultimo_eco2),
+            "eco2": eco2_actual,
             "tendencia": tendencia,
             "delta_ppm": delta_ppm,
+            "comando_arduino": comando,
         }
 
     except Exception as error:
@@ -161,13 +186,14 @@ def obtener_diagnostico_completo(
             "eco2": None,
             "tendencia": "DESCONOCIDA",
             "delta_ppm": 0.0,
+            "comando_arduino": b"0\n",
         }
 
 
 def evaluar_anomalia(
-    ruta_csv: str = RUTA_CSV_DEFAULT, contamination: float = 0.03
+    ruta_csv: str = RUTA_CSV_DEFAULT, contamination: float = 0.05
 ) -> int:
-    """Devuelve 1 si la última lectura es normal o -1 si es anómala."""
+    """Devuelve 1 si la última lectura coincide con el patrón de la zona o -1 si es anómala."""
     return obtener_diagnostico_completo(ruta_csv, contamination)["estado_ia"]
 
 
@@ -194,13 +220,12 @@ def generar_datos_prueba(
         tiempo = ahora - timedelta(seconds=(cantidad_filas - i))
         timestamps.append(tiempo.strftime("%Y-%m-%d %H:%M:%S"))
 
-        temp = np.random.normal(loc=31.0, scale=0.8)
-        hum = np.random.normal(loc=63.0, scale=2.5)
-        pres = np.random.normal(loc=999.0, scale=1.0)
+        temp = np.random.normal(loc=32.0, scale=0.3)
+        hum = np.random.normal(loc=60.6, scale=1.0)
+        pres = np.random.normal(loc=998.2, scale=0.4)
 
-        base_eco2 = 430.0 + (temp - 30.0) * 20.0
-        eco2 = float(np.clip(np.random.normal(loc=base_eco2, scale=25.0), 400.0, 800.0))
-        tvoc = float(max(0.0, round((eco2 - 400.0) * 0.15 + np.random.normal(0, 2), 0)))
+        eco2 = float(np.clip(np.random.normal(loc=850.0, scale=40.0), 750.0, 950.0))
+        tvoc = float(max(0.0, round((eco2 - 400.0) * 0.16 + np.random.normal(0, 3), 0)))
 
         temperaturas.append(round(float(temp), 2))
         humedades.append(round(float(hum), 2))
@@ -208,10 +233,9 @@ def generar_datos_prueba(
         eco2_vals.append(round(eco2, 0))
         tvoc_vals.append(tvoc)
 
-    if forzar_anomalia_final and cantidad_filas > 0:
-        temperaturas[-1] = 21.0
-        eco2_vals[-1] = 1450.0
-        tvoc_vals[-1] = 185.0
+    if forzar_anomalia_final and cantidad_filas >= 1:
+        eco2_vals[-1] = 2400.0
+        tvoc_vals[-1] = 320.0
 
     df_muestra = pd.DataFrame(
         {
@@ -228,10 +252,10 @@ def generar_datos_prueba(
 
 if __name__ == "__main__":
     generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=False)
-    assert evaluar_anomalia(RUTA_CSV_DEFAULT) == 1, "Fallo en Test 1 (Normal)"
+    assert evaluar_anomalia(RUTA_CSV_DEFAULT) == 1, "Fallo en Test 1 (Línea base de 850 ppm)"
 
     generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=True)
-    assert evaluar_anomalia(RUTA_CSV_DEFAULT) == -1, "Fallo en Test 2 (Anomalía)"
+    assert evaluar_anomalia(RUTA_CSV_DEFAULT) == -1, "Fallo en Test 2 (Anomalía sostenida)"
 
     df_fallo = pd.read_csv(RUTA_CSV_DEFAULT)
     df_fallo.loc[df_fallo.index[-1], "eco2"] = -999.0
@@ -240,7 +264,7 @@ if __name__ == "__main__":
 
     generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=False)
     diag = obtener_diagnostico_completo(RUTA_CSV_DEFAULT)
-    print(f"[OK] Pruebas IA superadas -> Estado: {diag['nivel_alerta']} | {diag['mensaje']}")
+    print(f"[OK] Pruebas IA adaptativa superadas -> {diag['nivel_alerta']} | {diag['mensaje']}")
 
     with open(RUTA_CSV_DEFAULT, "w", encoding="utf-8", newline="") as f:
         f.write("timestamp,temperatura,humedad,presion,eco2,tvoc\n")
