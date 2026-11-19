@@ -10,12 +10,12 @@
 
 | Módulo / Componente | Pin del Módulo | Pin en Arduino Uno | Alimentación / Notas Técnicas |
 | :--- | :--- | :--- | :--- |
-| **Sensor CCS811** (eCO2 y TVOC) | `VCC` | `3.3V` | **No conectar a 5V** (opera estrictamente a 3.3V) |
+| **Sensor CCS811** (eCO2 y TVOC) | `VCC` | `5V` | **Conectar a 5V** (opera estrictamente a 5V) |
 | **Sensor CCS811** (eCO2 y TVOC) | `GND` | `GND` | Tierra común |
 | **Sensor CCS811** (eCO2 y TVOC) | `SDA` | `A4` | Bus $I^2C$ Hardware (`0x5A`) |
 | **Sensor CCS811** (eCO2 y TVOC) | `SCL` | `A5` | Bus $I^2C$ Hardware (`0x5A`) |
 | **Sensor CCS811** (eCO2 y TVOC) | `WAK` | `GND` | Mantiene el sensor activo en modo lectura continua |
-| **Sensor HW-611 / BME280** (Clima) | `VCC` | `3.3V` | Alimentación regulada 3.3V |
+| **Sensor HW-611 / BME280** (Clima) | `VCC` | `5V` | Alimentación regulada 5V |
 | **Sensor HW-611 / BME280** (Clima) | `GND` | `GND` | Tierra común |
 | **Sensor HW-611 / BME280** (Clima) | `SDA` | `A2` | Bus $I^2C$ Software (`0x76` / `0x77` a 50 kHz) |
 | **Sensor HW-611 / BME280** (Clima) | `SCL` | `A3` | Bus $I^2C$ Software (`0x76` / `0x77` a 50 kHz) |
@@ -36,7 +36,7 @@
    SCL ─────────────┼─ A5               A3 ─┼───────────── SCL
    WAK ───┐         |                       |
    GND ───┴─────────┼─ GND              D8 ─┼───────────── I/O [Buzzer Activo]
-   VCC ─────────────┼─ 3.3V             5V ─┼───────────── VCC [Buzzer Activo]
+   VCC ─────────────┼─ 5V               5V ─┼───────────── VCC [Buzzer Activo]
                     |                       |
                     |  USB (Pin 0/1) ───────┼──► PC (COM6 @ 9600 baudios)
                     +-----------------------+

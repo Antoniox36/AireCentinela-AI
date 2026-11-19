@@ -1,4 +1,4 @@
-"""Motor de Inteligencia Artificial no supervisada (Isolation Forest) para AireCentinela AI."""
+"""Motor de Inteligencia Artificial no supervisada (Isolation Forest) para Aire Centinela AI."""
 
 import os
 from datetime import datetime, timedelta
@@ -16,6 +16,141 @@ FEATURES_IA = ["temperatura", "humedad", "presion", "eco2", "tvoc"]
 MARGEN_PRECAUCION_PPM = 200.0
 MARGEN_ALERTA_PPM = 450.0
 MARGEN_CRITICO_PPM = 800.0
+
+PERFILES_USO = ("Oficina / Escuela", "Agricultura / Cultivo", "Hogar / Salud")
+
+
+def interpretar_variables(
+    temp: float, hum: float, pres: float, eco2: float, tvoc: float
+) -> dict[str, str]:
+    """Traduce cada magnitud física a una explicación clara para cualquier usuario."""
+    if temp < 20.0:
+        txt_temp = "Ambiente fresco · Baja carga térmica"
+    elif temp <= 28.0:
+        txt_temp = "Confort térmico ideal para personas y equipos"
+    elif temp <= 33.0:
+        txt_temp = "Ambiente cálido · Conviene ventilación cruzada"
+    else:
+        txt_temp = "Estrés térmico alto · Riesgo de fatiga o deshidratación"
+
+    if hum <= 0.5:
+        txt_hum = "Sensor en modo presión/temperatura (sin lectura RH)"
+    elif hum < 35.0:
+        txt_hum = "Aire muy seco · Puede irritar vías respiratorias"
+    elif hum <= 65.0:
+        txt_hum = "Humedad equilibrada · Rango saludable (35–65 %)"
+    elif hum <= 80.0:
+        txt_hum = "Humedad elevada · Sensación bochornosa"
+    else:
+        txt_hum = "Humedad crítica · Riesgo de condensación y hongos"
+
+    if pres < 990.0:
+        txt_pres = "Baja presión relativa · Posible inestabilidad climática"
+    elif pres <= 1018.0:
+        txt_pres = "Presión atmosférica estable · Sin cambios bruscos"
+    else:
+        txt_pres = "Alta presión atmosférica · Tiempo despejado y estable"
+
+    if eco2 < 650.0:
+        txt_eco2 = "Aire limpio y bien oxigenado (< 650 ppm)"
+    elif eco2 < 1000.0:
+        txt_eco2 = "Concentración moderada · Aire interior aceptable"
+    elif eco2 < 1500.0:
+        txt_eco2 = "Aire viciado · Reduce concentración y produce somnolencia"
+    else:
+        txt_eco2 = "Acumulación crítica de CO2 · Ventilar de inmediato"
+
+    if tvoc < 50.0:
+        txt_tvoc = "Aire puro · Libre de compuestos volátiles o humo"
+    elif tvoc < 220.0:
+        txt_tvoc = "Presencia leve de vapores, perfumes o limpieza"
+    else:
+        txt_tvoc = "Alta carga química/humo · Posible irritación"
+
+    return {
+        "temperatura": txt_temp,
+        "humedad": txt_hum,
+        "presion": txt_pres,
+        "eco2": txt_eco2,
+        "tvoc": txt_tvoc,
+    }
+
+
+def generar_consejos_por_perfil(
+    temp: float, hum: float, pres: float, eco2: float, tvoc: float, nivel: str
+) -> dict[str, dict[str, str]]:
+    """Genera diagnósticos y recomendaciones adaptadas a cada sector productivo o cotidiano."""
+    # 1. Perfil Oficina / Escuela
+    if eco2 >= 1000.0 or nivel == "CRITICO":
+        titulo_edu = "Alerta de Fatiga Cognitiva"
+        detalle_edu = (
+            f"Con {eco2:.0f} ppm de eCO2 la atención y retención caen hasta un 15 %. "
+            "Abra puertas o active extracción durante 5 minutos."
+        )
+    elif eco2 >= 750.0 or nivel == "PRECAUCION":
+        titulo_edu = "Ventilación Preventiva Recomendada"
+        detalle_edu = (
+            f"El CO2 empieza a acumularse ({eco2:.0f} ppm) a {temp:.1f} °C. "
+            "Permita circulación de aire antes de que afecte el rendimiento."
+        )
+    else:
+        titulo_edu = "Entorno Óptimo para Aprendizaje y Trabajo"
+        detalle_edu = (
+            f"Calidad de aire limpia ({eco2:.0f} ppm) y TVOC controlado ({tvoc:.0f} ppb). "
+            "Condiciones ideales para concentración continua."
+        )
+
+    # 2. Perfil Agricultura / Cultivo (Invernadero o bodega agrícola)
+    if hum > 78.0:
+        titulo_agro = "Riesgo Fitosanitario por Humedad Alta"
+        detalle_agro = (
+            f"Humedad del {hum:.1f} % con {temp:.1f} °C favorece hongos foliares (mildiu/botritis). "
+            "Incremente ventilación y reduzca riego foliar."
+        )
+    elif temp > 33.0 and (hum > 0.5 and hum < 45.0):
+        titulo_agro = "Estrés Hídrico y Déficit de Presión de Vapor"
+        detalle_agro = (
+            f"Calor alto ({temp:.1f} °C) y aire seco ({hum:.1f} %) cierran estomas y frenan el crecimiento. "
+            "Active nebulización o sombreado."
+        )
+    elif eco2 >= 600.0 and eco2 <= 1300.0:
+        titulo_agro = "Microclima Favorable para Fotosíntesis"
+        detalle_agro = (
+            f"Nivel de CO2 ({eco2:.0f} ppm) y presión ({pres:.1f} hPa) estimulan actividad fotosintética "
+            "sin estrés térmico severo."
+        )
+    else:
+        titulo_agro = "Condiciones Agronómicas Estables"
+        detalle_agro = (
+            f"Temperatura ({temp:.1f} °C) y atmósfera ({pres:.1f} hPa) dentro de parámetros seguros "
+            "para cultivo protegido o almacenamiento de granos."
+        )
+
+    # 3. Perfil Hogar / Salud Respiratoria
+    if tvoc >= 180.0 or nivel == "CRITICO":
+        titulo_hogar = "Presencia de Gases o Vapores Irritantes"
+        detalle_hogar = (
+            f"TVOC elevado ({tvoc:.0f} ppb) y eCO2 en {eco2:.0f} ppm. "
+            "Puede deberse a humo de cocina, aerosoles o falta de aire fresco; ventile la habitación."
+        )
+    elif eco2 >= 800.0 or nivel == "PRECAUCION":
+        titulo_hogar = "Renovación de Aire Sugerida"
+        detalle_hogar = (
+            f"El aire interior supera la línea base habitual ({eco2:.0f} ppm). "
+            "Ventilar mejora el descanso y reduce dolor de cabeza."
+        )
+    else:
+        titulo_hogar = "Aire Interior Saludable y Seguro"
+        detalle_hogar = (
+            f"Sin acumulación de gases ({eco2:.0f} ppm) ni compuestos volátiles ({tvoc:.0f} ppb). "
+            "Ambiente apto para niños, adultos mayores y personas sensibles."
+        )
+
+    return {
+        "Oficina / Escuela": {"titulo": titulo_edu, "detalle": detalle_edu},
+        "Agricultura / Cultivo": {"titulo": titulo_agro, "detalle": detalle_agro},
+        "Hogar / Salud": {"titulo": titulo_hogar, "detalle": detalle_hogar},
+    }
 
 
 def calcular_tendencia_eco2(serie_eco2: pd.Series) -> dict:
@@ -45,50 +180,48 @@ def obtener_diagnostico_completo(
     ruta_csv: str = RUTA_CSV_DEFAULT, contamination: float = 0.05
 ) -> dict:
     """Evalúa el estado ambiental combinando Isolation Forest y márgenes relativos sobre la línea base."""
+    respuesta_base = {
+        "estado_ia": 1,
+        "nivel_alerta": "SIN_DATOS",
+        "mensaje": "Esperando primeras tramas del sensor",
+        "temperatura": None,
+        "humedad": None,
+        "presion": None,
+        "eco2": None,
+        "tvoc": None,
+        "base_eco2": 450.0,
+        "limite_normal_eco2": 650.0,
+        "tendencia": "DESCONOCIDA",
+        "delta_ppm": 0.0,
+        "comando_arduino": b"0\n",
+        "interpretaciones": {},
+        "perfiles": {},
+        "muestras_analizadas": 0,
+    }
+
     if not os.path.exists(ruta_csv):
-        return {
-            "estado_ia": 1,
-            "nivel_alerta": "SIN_DATOS",
-            "mensaje": f"No se encontró el archivo '{ruta_csv}'",
-            "temperatura": None,
-            "eco2": None,
-            "tendencia": "DESCONOCIDA",
-            "delta_ppm": 0.0,
-            "comando_arduino": b"0\n",
-        }
+        respuesta_base["mensaje"] = f"No se encontró el archivo '{ruta_csv}'"
+        return respuesta_base
 
     try:
         df = pd.read_csv(ruta_csv)
         if not all(col in df.columns for col in FEATURES_IA):
-            return {
-                "estado_ia": 1,
-                "nivel_alerta": "ERROR_ESQUEMA",
-                "mensaje": f"Faltan columnas requeridas {FEATURES_IA}",
-                "temperatura": None,
-                "eco2": None,
-                "tendencia": "DESCONOCIDA",
-                "delta_ppm": 0.0,
-                "comando_arduino": b"0\n",
-            }
+            respuesta_base["nivel_alerta"] = "ERROR_ESQUEMA"
+            respuesta_base["mensaje"] = f"Faltan columnas requeridas {FEATURES_IA}"
+            return respuesta_base
 
         if df.empty:
-            return {
-                "estado_ia": 1,
-                "nivel_alerta": "SIN_DATOS",
-                "mensaje": "Esperando primeras tramas del sensor",
-                "temperatura": None,
-                "eco2": None,
-                "tendencia": "DESCONOCIDA",
-                "delta_ppm": 0.0,
-                "comando_arduino": b"0\n",
-            }
+            return respuesta_base
 
         df_reciente = df.tail(150).copy()
         for col in FEATURES_IA:
             df_reciente[col] = pd.to_numeric(df_reciente[col], errors="coerce")
 
         ultima_temp = df_reciente["temperatura"].iloc[-1]
+        ultima_hum = df_reciente["humedad"].iloc[-1]
+        ultima_pres = df_reciente["presion"].iloc[-1]
         ultimo_eco2 = df_reciente["eco2"].iloc[-1]
+        ultimo_tvoc = df_reciente["tvoc"].iloc[-1]
 
         if (
             pd.isna(ultima_temp)
@@ -98,29 +231,49 @@ def obtener_diagnostico_completo(
             or ultimo_eco2 <= 0.0
             or ultimo_eco2 > 20000.0
         ):
-            return {
-                "estado_ia": -1,
-                "nivel_alerta": "FALLO_HARDWARE",
-                "mensaje": "Desconexión o lectura física fuera de rango",
-                "temperatura": ultima_temp,
-                "eco2": ultimo_eco2,
-                "tendencia": "ERROR",
-                "delta_ppm": 0.0,
-                "comando_arduino": b"0\n",
-            }
+            respuesta_base.update(
+                {
+                    "estado_ia": -1,
+                    "nivel_alerta": "FALLO_HARDWARE",
+                    "mensaje": "Desconexión o lectura física fuera de rango",
+                    "temperatura": ultima_temp,
+                    "eco2": ultimo_eco2,
+                    "tendencia": "ERROR",
+                }
+            )
+            return respuesta_base
 
+        temp_f = float(ultima_temp)
+        hum_f = float(ultima_hum) if not pd.isna(ultima_hum) else 0.0
+        pres_f = float(ultima_pres) if not pd.isna(ultima_pres) else 1013.25
+        eco2_f = float(ultimo_eco2)
+        tvoc_f = float(ultimo_tvoc) if not pd.isna(ultimo_tvoc) else 0.0
+
+        interpretaciones = interpretar_variables(temp_f, hum_f, pres_f, eco2_f, tvoc_f)
         df_limpio = df_reciente[FEATURES_IA].dropna().copy()
+        n_muestras = len(df_limpio)
 
-        if len(df_limpio) < 15:
+        if n_muestras < 15:
+            perfiles = generar_consejos_por_perfil(
+                temp_f, hum_f, pres_f, eco2_f, tvoc_f, "CALIBRANDO"
+            )
             return {
                 "estado_ia": 1,
                 "nivel_alerta": "CALIBRANDO",
-                "mensaje": f"Aprendiendo línea base de la zona ({len(df_limpio)}/15)",
-                "temperatura": float(ultima_temp),
-                "eco2": float(ultimo_eco2),
+                "mensaje": f"Aprendiendo línea base de la zona ({n_muestras}/15)",
+                "temperatura": temp_f,
+                "humedad": hum_f,
+                "presion": pres_f,
+                "eco2": eco2_f,
+                "tvoc": tvoc_f,
+                "base_eco2": eco2_f,
+                "limite_normal_eco2": eco2_f + MARGEN_PRECAUCION_PPM,
                 "tendencia": "CALIBRANDO",
                 "delta_ppm": 0.0,
                 "comando_arduino": b"0\n",
+                "interpretaciones": interpretaciones,
+                "perfiles": perfiles,
+                "muestras_analizadas": n_muestras,
             }
 
         matriz_features = df_limpio[FEATURES_IA].values
@@ -130,64 +283,67 @@ def obtener_diagnostico_completo(
         modelo.fit(matriz_features)
 
         estado_ia = int(modelo.predict(matriz_features)[-1])
-        eco2_actual = float(ultimo_eco2)
         mediana_zona = float(df_limpio["eco2"].median())
-        exceso_sobre_base = eco2_actual - mediana_zona
+        exceso_sobre_base = eco2_f - mediana_zona
 
         info_tendencia = calcular_tendencia_eco2(df_limpio["eco2"])
         tendencia = info_tendencia["tendencia"]
         delta_ppm = info_tendencia["delta_ppm"]
 
-        # Escala progresiva estándar relativa a la línea base de la zona + veredicto IA
         if exceso_sobre_base >= MARGEN_CRITICO_PPM:
             nivel = "CRITICO"
-            comando = b"3\n"  # Pitido continuo
+            comando = b"3\n"
             mensaje = (
-                f"CRÍTICO: {eco2_actual:.0f} ppm (+{exceso_sobre_base:.0f} sobre base {mediana_zona:.0f})"
+                f"CRÍTICO: {eco2_f:.0f} ppm (+{exceso_sobre_base:.0f} sobre base {mediana_zona:.0f})"
             )
         elif exceso_sobre_base >= MARGEN_ALERTA_PPM and estado_ia == -1:
             nivel = "CRITICO"
-            comando = b"2\n"  # Pulso rápido
+            comando = b"2\n"
             mensaje = (
-                f"Anomalía alta: {eco2_actual:.0f} ppm (base {mediana_zona:.0f} ppm)"
+                f"Anomalía alta: {eco2_f:.0f} ppm (base {mediana_zona:.0f} ppm)"
             )
         elif exceso_sobre_base >= MARGEN_PRECAUCION_PPM or (
             estado_ia == -1 and exceso_sobre_base > 100.0
         ):
             nivel = "PRECAUCION"
-            comando = b"1\n"  # Pulso lento
+            comando = b"1\n"
             mensaje = (
-                f"Precaución: {eco2_actual:.0f} ppm (+{exceso_sobre_base:.0f} sobre base)"
+                f"Precaución: {eco2_f:.0f} ppm (+{exceso_sobre_base:.0f} sobre base)"
             )
         else:
             nivel = "OPTIMO"
-            comando = b"0\n"  # Silencio
+            comando = b"0\n"
             mensaje = (
                 f"Patrón normal de la zona (base ~{mediana_zona:.0f} ppm)"
             )
+
+        perfiles = generar_consejos_por_perfil(
+            temp_f, hum_f, pres_f, eco2_f, tvoc_f, nivel
+        )
 
         return {
             "estado_ia": estado_ia,
             "nivel_alerta": nivel,
             "mensaje": mensaje,
-            "temperatura": float(ultima_temp),
-            "eco2": eco2_actual,
+            "temperatura": temp_f,
+            "humedad": hum_f,
+            "presion": pres_f,
+            "eco2": eco2_f,
+            "tvoc": tvoc_f,
+            "base_eco2": round(mediana_zona, 1),
+            "limite_normal_eco2": round(mediana_zona + MARGEN_PRECAUCION_PPM, 1),
             "tendencia": tendencia,
             "delta_ppm": delta_ppm,
             "comando_arduino": comando,
+            "interpretaciones": interpretaciones,
+            "perfiles": perfiles,
+            "muestras_analizadas": n_muestras,
         }
 
     except Exception as error:
-        return {
-            "estado_ia": 1,
-            "nivel_alerta": "ERROR_SISTEMA",
-            "mensaje": str(error),
-            "temperatura": None,
-            "eco2": None,
-            "tendencia": "DESCONOCIDA",
-            "delta_ppm": 0.0,
-            "comando_arduino": b"0\n",
-        }
+        respuesta_base["nivel_alerta"] = "ERROR_SISTEMA"
+        respuesta_base["mensaje"] = str(error)
+        return respuesta_base
 
 
 def evaluar_anomalia(
@@ -264,6 +420,7 @@ if __name__ == "__main__":
 
     generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=False)
     diag = obtener_diagnostico_completo(RUTA_CSV_DEFAULT)
+    assert "perfiles" in diag and "interpretaciones" in diag
     print(f"[OK] Pruebas IA adaptativa superadas -> {diag['nivel_alerta']} | {diag['mensaje']}")
 
     with open(RUTA_CSV_DEFAULT, "w", encoding="utf-8", newline="") as f:

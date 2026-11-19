@@ -1,4 +1,4 @@
-# 🍃 AireCentinela AI — Estación Ambiental Inteligente
+# 🍃 Aire Centinela AI — Estación Ambiental Inteligente
 
 > **Universidad Gerardo Barrios (UGB) — Sede San Miguel**  
 > *Facultad de Ciencia y Tecnología*  
@@ -8,11 +8,11 @@
 
 ## 📌 Descripción General
 
-**AireCentinela AI** es una estación de monitoreo ambiental inteligente en tiempo real diseñada para la captura, almacenamiento y análisis autónomo de la calidad del aire interior.
+**Aire Centinela AI** es una estación de monitoreo ambiental inteligente en tiempo real diseñada para la captura, almacenamiento, interpretación y análisis autónomo de la calidad del aire interior y microclimas.
 
 El sistema integra un microcontrolador **Arduino Uno R3** con buses $I^2C$ aislados para los sensores **CCS811** (`eCO2` y `TVOC`) y **HW-611 / BME280** (temperatura, humedad relativa y presión atmosférica), enviando tramas **JSON** cada segundo a través de USB (`COM6` a `9600` baudios).
 
-El backend en **Python** valida y registra las lecturas en `data/datos_ambientales.csv`, ejecuta en tiempo real un modelo no supervisado **Isolation Forest** (`scikit-learn`) que aprende la línea base de cada habitación y envía de vuelta al Arduino órdenes de alerta sonora progresiva para el **Buzzer Activo**, mientras un dashboard en **PyQt6** y **Matplotlib** visualiza métricas, curvas históricas y diagnósticos en vivo.
+El backend en **Python** valida y registra las lecturas en `data/datos_ambientales.csv`, ejecuta en tiempo real un modelo no supervisado **Isolation Forest** (`scikit-learn`) que aprende la línea base de cada entorno y envía de vuelta al Arduino órdenes de alerta sonora progresiva para el **Buzzer Activo**. Por su parte, la interfaz gráfica en **PyQt6** y **Matplotlib** incluye auditoría inicial de hardware, traducción en lenguaje natural para perfiles sectoriales (**Oficina / Escuela**, **Agricultura / Cultivo**, **Hogar / Salud**) y registro verificable con comparativa por ubicación (`data/sesiones_ubicaciones.json`).
 
 ---
 
@@ -40,12 +40,13 @@ AireCentinela-AI/
 │   ├── backend_serial.py                  # Receptor/emisor serial bidireccional (COM6)
 │   └── DOCUMENTATION.md
 ├── ia_engine/
-│   ├── motor_ia.py                        # Isolation Forest adaptativo + márgenes relativos
+│   ├── motor_ia.py                        # Isolation Forest adaptativo + perfiles sectoriales
 │   └── DOCUMENTACION.md
 ├── frontend/
-│   └── app_airecentinela.py               # Dashboard PyQt6 + Matplotlib en tiempo real
+│   └── app_airecentinela.py               # Dashboard PyQt6 (Auditoría, Perfiles y Evidencia)
 ├── data/
-│   └── datos_ambientales.csv              # Historial ambiental (6 columnas)
+│   ├── datos_ambientales.csv              # Historial ambiental continuo (6 columnas)
+│   └── sesiones_ubicaciones.json          # Registro auditado de snapshots por ubicación
 ├── docs/
 │   └── mapa_conexiones.md                 # Diagrama y tabla de pines físicos
 ├── tests/
@@ -69,12 +70,13 @@ AireCentinela-AI/
  ├── Persistencia continua en data/datos_ambientales.csv
  └── Consulta en vivo al Motor IA y retorno de comando al Arduino
         │
-        ├─────────────────────────────────────────┐
-        ▼                                         ▼
-[ IA ENGINE — ia_engine/motor_ia.py ]    [ FRONTEND — frontend/app_airecentinela.py ]
- ├── Ventana deslizante (150 lecturas)     ├── Tarjetas métricas en vivo (refresco 1 s)
- ├── Línea base adaptativa por zona        ├── Gráfica histórica dinámica de eCO2
- └── Isolation Forest (scikit-learn)       └── Semáforo de diagnóstico y tendencia
+        ├─────────────────────────────────────────────┐
+        ▼                                             ▼
+[ IA ENGINE — ia_engine/motor_ia.py ]        [ FRONTEND — frontend/app_airecentinela.py ]
+ ├── Ventana deslizante (150 lecturas)         ├── Auditoría de arranque (Sensores, CSV, GPS e IA)
+ ├── Línea base adaptativa por zona            ├── Monitor en vivo + banda normal sombreada
+ ├── Isolation Forest (scikit-learn)           ├── Diagnóstico por sector (Agro, Aula, Hogar)
+ └── Traducción humana de variables físicas    └── Evidencia y comparativa por ubicación
 ```
 
 ---
@@ -87,6 +89,15 @@ AireCentinela-AI/
 | **HW-611 / BME280** (Clima) | $I^2C$ Software (`SoftwareWire`) | `A2` (SDA), `A3` (SCL) | Dirección `0x76`, `VCC` a `3.3V`, reloj `50 kHz` |
 | **Buzzer Activo** | Salida Digital | `Pin 8` | Lógica invertida (`Active-LOW`), controlado por IA |
 | **Puerto Serie USB** | UART Hardware | `Pin 0` (RX), `Pin 1` (TX) | Comunicación bidireccional `COM6` a `9600` baudios |
+
+---
+
+## ✨ Funcionalidades Clave de la Plataforma
+
+* **Auditoría Previa de Componentes:** Pantalla inicial que verifica el estado del canal serial, respuesta de los sensores `CCS811` y `HW-611 / BME280`, punto geográfico en San Miguel y calibración del modelo antes de abrir el panel principal.
+* **Interpretación Humana en Tiempo Real:** Cada tarjeta de medición traduce el valor numérico a un diagnóstico inmediato comprensible para cualquier usuario, acompañado de una banda sombreada en la gráfica que delimita la zona normal aprendida por la IA.
+* **Adaptabilidad por Perfil de Uso:** Cambia dinámicamente las recomendaciones según el entorno de aplicación (**Oficina / Escuela**, **Agricultura / Cultivo** u **Hogar / Salud**) e incluye fichas técnicas de referencia rápida.
+* **Evidencia y Comparativa por Ubicación:** Permite guardar snapshots completos por punto de medición (`data/sesiones_ubicaciones.json`), reconstruir su última gráfica/veredicto al seleccionarlo y compararlo frente a las lecturas actuales en vivo.
 
 ---
 
@@ -105,7 +116,7 @@ AireCentinela-AI/
    *Opciones útiles de `main.py`:*
    * `python main.py --limpiar`: Borra el historial CSV anterior antes de iniciar una nueva sesión.
    * `python main.py --port COM6`: Especifica manualmente el puerto serial.
-   * `python main.py --sin-hardware`: Abre el dashboard para revisar datos guardados sin Arduino conectado.
+   * `python main.py --sin-hardware`: Abre el dashboard para revisar datos guardados o demostrar la interfaz sin Arduino conectado.
 
 3. **Ejecutar pruebas individuales:**
    ```powershell
