@@ -1,11 +1,14 @@
-"""Frontend profesional de Aire Centinela AI: estética bio-ambiental, perfiles y evidencia por ubicación."""
+"""Frontend de Aire Centinela AI: diagnóstico transparente, perfiles y evidencia por ubicación."""
 
 import json
 import os
 import sys
 from datetime import datetime
 
+import matplotlib.dates as mdates
 import pandas as pd
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
@@ -28,9 +31,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-import matplotlib.dates as mdates
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-from matplotlib.figure import Figure
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -45,21 +45,20 @@ RUTA_UBICACIONES = os.path.join(RAIZ_PROYECTO, "data", "sesiones_ubicaciones.jso
 COLUMNAS_CSV = ("timestamp", "temperatura", "humedad", "presion", "eco2", "tvoc")
 INTERVALO_ACTUALIZACION_MS = 1000
 
-# Paleta Bio-Ambiental Obsidiana & Esmeralda (cero tonos azules)
-FONDO = "#0B0D0C"          # Obsidiana volcánica profunda
-SIDEBAR = "#111513"        # Carbón musgo oscuro
-TARJETA = "#161B18"        # Grafito orgánico
-TARJETA_ALT = "#1E2521"    # Elevación sutil
-BORDE = "#2B3530"          # Borde mineral
-TEXTO = "#F4F6F5"          # Blanco cálido
-SECUNDARIO = "#9CA8A1"     # Gris salvia
-ACENTO = "#10B981"         # Verde esmeralda principal
-LIMA = "#84CC16"           # Lima bio-sensor
-AMBAR = "#F59E0B"          # Ámbar solar
-CORAL = "#F43F5E"          # Coral alerta crítica
-VIOLETA = "#A78BFA"        # Lavanda para presión barométrica
+# Paleta Bio-Ambiental Obsidiana & Esmeralda (sin tonos azules)
+FONDO = "#0B0D0C"
+SIDEBAR = "#111513"
+TARJETA = "#161B18"
+TARJETA_ALT = "#1E2521"
+BORDE = "#2B3530"
+TEXTO = "#F4F6F5"
+SECUNDARIO = "#9CA8A1"
+ACENTO = "#10B981"
+LIMA = "#84CC16"
+AMBAR = "#F59E0B"
+CORAL = "#F43F5E"
+VIOLETA = "#A78BFA"
 
-# Puntos reales calibrados en San Miguel, El Salvador
 PUNTOS_SAN_MIGUEL = {
     "Campus UGB · San Miguel": ("13.4892° N, 88.1914° O", "San Miguel, El Salvador"),
     "Laboratorio Electrónica · UGB": ("13.4895° N, 88.1911° O", "San Miguel, El Salvador"),
@@ -70,7 +69,6 @@ PUNTOS_SAN_MIGUEL = {
 
 
 def obtener_ubicacion_base() -> dict[str, str]:
-    """Devuelve la ubicación base calibrada en San Miguel, El Salvador."""
     punto_default = "Campus UGB · San Miguel"
     coords, region = PUNTOS_SAN_MIGUEL[punto_default]
     return {
@@ -80,13 +78,33 @@ def obtener_ubicacion_base() -> dict[str, str]:
     }
 
 
+def inspeccionar_csv() -> tuple[bool, int, str]:
+    """Devuelve (existe_con_datos, cantidad_filas, resumen_legible)."""
+    if not os.path.exists(RUTA_CSV):
+        return False, 0, "No existe data/datos_ambientales.csv todavía."
+    try:
+        df = pd.read_csv(RUTA_CSV)
+        if df.empty:
+            return False, 0, "El archivo CSV existe pero está vacío (0 filas aún)."
+        ultima = df.iloc[-1]
+        temp = pd.to_numeric(ultima.get("temperatura"), errors="coerce")
+        eco2 = pd.to_numeric(ultima.get("eco2"), errors="coerce")
+        resumen = (
+            f"{len(df)} filas en CSV · Última lectura: "
+            f"{temp:.1f} °C / {eco2:.0f} ppm ({ultima.get('timestamp', 'sin hora')})"
+        )
+        return True, len(df), resumen
+    except Exception as exc:
+        return False, 0, f"Error leyendo CSV: {exc}"
+
+
 class DialogoArranque(QDialog):
-    """Pantalla de auditoría inicial que verifica hardware, CSV, ubicación e IA."""
+    """Diagnóstico paso a paso con avance manual para que puedas leer qué ocurre."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Aire Centinela AI | Diagnóstico de Inicio")
-        self.setFixedSize(560, 405)
+        self.setWindowTitle("Aire Centinela AI | Diagnóstico Paso a Paso")
+        self.setMinimumSize(600, 440)
         self.setStyleSheet(
             f"QDialog {{background-color: {FONDO}; border: 1px solid {BORDE};}}"
             f"QLabel {{color: {TEXTO}; background: transparent;}}"
@@ -96,163 +114,160 @@ class DialogoArranque(QDialog):
         self._construir_ui()
 
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self._ejecutar_paso)
-        self.timer.start(400)
+        self.timer.timeout.connect(self._siguiente_paso)
+        self.timer.start(900)
 
     def _construir_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(30, 26, 30, 26)
         layout.setSpacing(14)
 
-        marca = QLabel("AIRE CENTINELA AI · ESTACIÓN AMBIENTAL")
+        marca = QLabel("AIRE CENTINELA AI · AUDITORÍA DE ARRANQUE")
         marca.setStyleSheet(
-            f"color: {LIMA}; font-size: 11px; font-weight: 800; letter-spacing: 2px;"
+            f"color: {LIMA}; font-size: 11px; font-weight: 800; letter-spacing: 1.5px;"
         )
         layout.addWidget(marca)
 
-        titulo = QLabel("Verificando Sensores y Motor IA")
+        titulo = QLabel("Estado Real de Datos, Sensores y Motor IA")
         titulo.setStyleSheet(f"color: {TEXTO}; font-size: 20px; font-weight: 800;")
         layout.addWidget(titulo)
 
-        subtitulo = QLabel(
-            "Comprobación previa de buses I2C, canal serial y coordenadas de San Miguel."
-        )
-        subtitulo.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px;")
-        layout.addWidget(subtitulo)
-
-        marco_checks = QFrame()
-        marco_checks.setStyleSheet(
+        marco = QFrame()
+        marco.setStyleSheet(
             f"QFrame {{background-color: {TARJETA}; border: 1px solid {BORDE}; border-radius: 12px;}}"
         )
-        v_checks = QVBoxLayout(marco_checks)
-        v_checks.setContentsMargins(18, 16, 18, 16)
-        v_checks.setSpacing(12)
+        v_box = QVBoxLayout(marco)
+        v_box.setContentsMargins(18, 16, 18, 16)
+        v_box.setSpacing(12)
 
-        self.lbl_serial = QLabel("⏳  1. Canal de telemetría USB y almacenamiento CSV...")
-        self.lbl_ccs = QLabel("⏳  2. Sensor CCS811 (Bus I2C Hardware A4/A5 · eCO2/TVOC)...")
-        self.lbl_bme = QLabel("⏳  3. Sensor HW-611 / BME280 (Bus I2C A2/A3 · Clima)...")
-        self.lbl_gps = QLabel("⏳  4. Punto geográfico San Miguel y modelo Isolation Forest...")
+        self.lbl_paso1 = QLabel("1. Revisando archivo de telemetría CSV...")
+        self.lbl_paso2 = QLabel("2. Revisando últimas lecturas de CCS811 (A4/A5) y BME280 (A2/A3)...")
+        self.lbl_paso3 = QLabel("3. Evaluando motor Isolation Forest...")
+        self.lbl_paso4 = QLabel("4. Ubicación de estación configurada...")
 
-        for lbl in (self.lbl_serial, self.lbl_ccs, self.lbl_bme, self.lbl_gps):
-            lbl.setStyleSheet(f"color: {SECUNDARIO}; font-size: 13px; border: none;")
-            v_checks.addWidget(lbl)
+        for lbl in (self.lbl_paso1, self.lbl_paso2, self.lbl_paso3, self.lbl_paso4):
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px; border: none;")
+            v_box.addWidget(lbl)
 
-        layout.addWidget(marco_checks)
+        layout.addWidget(marco)
 
         self.barra = QProgressBar()
         self.barra.setRange(0, 100)
-        self.barra.setValue(10)
-        self.barra.setTextVisible(False)
-        self.barra.setFixedHeight(8)
+        self.barra.setValue(0)
+        self.barra.setTextVisible(True)
+        self.barra.setFormat("Diagnóstico: %p%")
+        self.barra.setFixedHeight(18)
         self.barra.setStyleSheet(
-            f"QProgressBar {{background-color: {TARJETA}; border-radius: 4px;}}"
-            f"QProgressBar::chunk {{background-color: {ACENTO}; border-radius: 4px;}}"
+            f"QProgressBar {{background-color: {TARJETA}; color: {TEXTO}; border: 1px solid {BORDE}; "
+            "border-radius: 6px; font-size: 11px; text-align: center;}}"
+            f"QProgressBar::chunk {{background-color: {ACENTO}; border-radius: 5px;}}"
         )
         layout.addWidget(self.barra)
 
-        fila_bot = QHBoxLayout()
-        self.lbl_estado = QLabel("Ejecutando auditoría de sistema...")
-        self.lbl_estado.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px;")
-        fila_bot.addWidget(self.lbl_estado)
-        fila_bot.addStretch()
-
-        self.btn_continuar = QPushButton("Abrir Consola")
-        self.btn_continuar.setEnabled(False)
-        self.btn_continuar.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_continuar.setStyleSheet(
-            f"QPushButton {{background-color: {ACENTO}; color: #05140E; font-weight: 800; "
-            "padding: 8px 18px; border-radius: 8px; font-size: 13px;}}"
-            f"QPushButton:disabled {{background-color: {BORDE}; color: {SECUNDARIO};}}"
+        self.lbl_ayuda = QLabel(
+            "Si el CSV está vacío, revisa en la terminal si el backend está recibiendo JSON o si el firmware reporta FALLO."
         )
-        self.btn_continuar.clicked.connect(self.accept)
-        fila_bot.addWidget(self.btn_continuar)
-        layout.addLayout(fila_bot)
+        self.lbl_ayuda.setWordWrap(True)
+        self.lbl_ayuda.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px;")
+        layout.addWidget(self.lbl_ayuda)
 
-    def _ejecutar_paso(self):
+        fila_btns = QHBoxLayout()
+        self.btn_reintentar = QPushButton("Volver a Comprobar")
+        self.btn_reintentar.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_reintentar.setStyleSheet(
+            f"QPushButton {{background-color: {TARJETA_ALT}; color: {TEXTO}; border: 1px solid {BORDE}; "
+            "padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;}}"
+        )
+        self.btn_reintentar.clicked.connect(self._reiniciar_diagnostico)
+        fila_btns.addWidget(self.btn_reintentar)
+
+        fila_btns.addStretch()
+
+        self.btn_entrar = QPushButton("Abrir Consola")
+        self.btn_entrar.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_entrar.setStyleSheet(
+            f"QPushButton {{background-color: {ACENTO}; color: #05140E; font-weight: 800; "
+            "padding: 9px 20px; border-radius: 8px; font-size: 13px;}}"
+            "QPushButton:hover {background-color: #34D399;}"
+        )
+        self.btn_entrar.clicked.connect(self.accept)
+        fila_btns.addWidget(self.btn_entrar)
+        layout.addLayout(fila_btns)
+
+    def _reiniciar_diagnostico(self):
+        self.paso = 0
+        self.barra.setValue(0)
+        self.lbl_paso1.setText("1. Revisando archivo de telemetría CSV...")
+        self.lbl_paso2.setText("2. Revisando últimas lecturas de CCS811 y BME280...")
+        self.lbl_paso3.setText("3. Evaluando motor Isolation Forest...")
+        self.timer.start(800)
+
+    def _siguiente_paso(self):
         self.paso += 1
-        df_actual = None
-        if os.path.exists(RUTA_CSV):
-            try:
-                df_actual = pd.read_csv(RUTA_CSV)
-            except Exception:
-                df_actual = None
+        tiene_datos, n_filas, resumen = inspeccionar_csv()
 
         if self.paso == 1:
-            self.barra.setValue(30)
-            if df_actual is not None and not df_actual.empty:
-                self.lbl_serial.setText(
-                    f"✅  1. Historial CSV activo ({len(df_actual)} tramas registradas)"
-                )
-                self.lbl_serial.setStyleSheet(f"color: {ACENTO}; font-size: 13px; border: none;")
+            self.barra.setValue(25)
+            if tiene_datos:
+                self.lbl_paso1.setText(f"1. [OK] {resumen}")
+                self.lbl_paso1.setStyleSheet(f"color: {ACENTO}; font-size: 12px; border: none;")
             else:
-                self.lbl_serial.setText(
-                    "⚠️  1. Sin hardware conectado aún (modo escucha listo)"
-                )
-                self.lbl_serial.setStyleSheet(f"color: {AMBAR}; font-size: 13px; border: none;")
+                self.lbl_paso1.setText(f"1. [ATENCIÓN] {resumen}")
+                self.lbl_paso1.setStyleSheet(f"color: {AMBAR}; font-size: 12px; border: none;")
 
         elif self.paso == 2:
-            self.barra.setValue(55)
-            if df_actual is not None and not df_actual.empty:
-                eco2_val = pd.to_numeric(df_actual["eco2"].iloc[-1], errors="coerce")
-                if not pd.isna(eco2_val) and eco2_val > 0:
-                    self.lbl_ccs.setText(
-                        f"✅  2. CCS811 operativo en A4/A5 (lectura: {eco2_val:.0f} ppm)"
-                    )
-                    self.lbl_ccs.setStyleSheet(f"color: {ACENTO}; font-size: 13px; border: none;")
-                else:
-                    self.lbl_ccs.setText("❌  2. CCS811 sin lectura válida en A4/A5")
-                    self.lbl_ccs.setStyleSheet(f"color: {CORAL}; font-size: 13px; border: none;")
+            self.barra.setValue(50)
+            if tiene_datos:
+                self.lbl_paso2.setText(
+                    "2. [OK] Tramas numéricas detectadas en CSV (CCS811 A4/A5 y BME280 A2/A3)."
+                )
+                self.lbl_paso2.setStyleSheet(f"color: {ACENTO}; font-size: 12px; border: none;")
             else:
-                self.lbl_ccs.setText("⏳  2. CCS811 en espera de conexión USB / COM")
+                self.lbl_paso2.setText(
+                    "2. [SIN LECTURAS] Aún no llegan filas válidas. Si usas hardware, revisa la consola del backend."
+                )
+                self.lbl_paso2.setStyleSheet(f"color: {CORAL}; font-size: 12px; border: none;")
 
         elif self.paso == 3:
-            self.barra.setValue(80)
-            if df_actual is not None and not df_actual.empty:
-                temp_val = pd.to_numeric(df_actual["temperatura"].iloc[-1], errors="coerce")
-                pres_val = pd.to_numeric(df_actual["presion"].iloc[-1], errors="coerce")
-                if not pd.isna(temp_val) and -40 <= temp_val <= 85:
-                    self.lbl_bme.setText(
-                        f"✅  3. HW-611 / BME280 operativo en A2/A3 ({temp_val:.1f} °C · {pres_val:.1f} hPa)"
-                    )
-                    self.lbl_bme.setStyleSheet(f"color: {ACENTO}; font-size: 13px; border: none;")
-                else:
-                    self.lbl_bme.setText("❌  3. Fallo en HW-611 / BME280 (pines A2/A3)")
-                    self.lbl_bme.setStyleSheet(f"color: {CORAL}; font-size: 13px; border: none;")
-            else:
-                self.lbl_bme.setText("⏳  3. HW-611 / BME280 en espera de conexión USB / COM")
+            self.barra.setValue(75)
+            diag = obtener_diagnostico_completo(RUTA_CSV)
+            nivel = diag.get("nivel_alerta", "SIN_DATOS")
+            msg = diag.get("mensaje", "")
+            color_ia = ACENTO if nivel == "OPTIMO" else (AMBAR if nivel in ("CALIBRANDO", "PRECAUCION") else CORAL)
+            self.lbl_paso3.setText(f"3. Motor IA -> {nivel}: {msg}")
+            self.lbl_paso3.setStyleSheet(f"color: {color_ia}; font-size: 12px; border: none;")
 
         elif self.paso >= 4:
             self.timer.stop()
             self.barra.setValue(100)
-            self.lbl_gps.setText(
-                f"✅  4. {self.ubicacion_detectada['nombre']} · Isolation Forest listo"
+            self.lbl_paso4.setText(
+                f"4. [LISTO] {self.ubicacion_detectada['nombre']} ({self.ubicacion_detectada['coordenadas']})"
             )
-            self.lbl_gps.setStyleSheet(f"color: {ACENTO}; font-size: 13px; border: none;")
-            self.lbl_estado.setText("Estación verificada. Abriendo panel principal...")
-            self.btn_continuar.setEnabled(True)
-            QTimer.singleShot(650, self.accept)
+            self.lbl_paso4.setStyleSheet(f"color: {ACENTO}; font-size: 12px; border: none;")
+            self.lbl_ayuda.setText(
+                f"Diagnóstico pausado para tu lectura ({n_filas} filas listas). Pulsa 'Abrir Consola' cuando gustes."
+            )
 
 
 class TarjetaMetrica(QFrame):
-    """Tarjeta de lectura ambiental con interpretación humana directa."""
-
     def __init__(self, titulo, unidad, color, decimales=1, destacada=False):
         super().__init__()
         self.decimales = decimales
-        self.setMinimumHeight(156)
+        self.setMinimumHeight(152)
         self.setStyleSheet(
             f"QFrame {{background-color: {TARJETA}; border: 1px solid "
-            f"{ACENTO if destacada else BORDE}; border-radius: 16px;}}"
+            f"{ACENTO if destacada else BORDE}; border-radius: 14px;}}"
             "QLabel {border: none; background: transparent;}"
         )
 
         contenedor = QVBoxLayout(self)
-        contenedor.setContentsMargins(20, 16, 20, 16)
+        contenedor.setContentsMargins(18, 14, 18, 14)
         contenedor.setSpacing(6)
 
         etiqueta = QLabel(titulo.upper())
         etiqueta.setStyleSheet(
-            f"color: {color}; font-size: 11px; font-weight: 800; letter-spacing: 1.2px;"
+            f"color: {color}; font-size: 11px; font-weight: 800; letter-spacing: 1px;"
         )
         contenedor.addWidget(etiqueta)
 
@@ -263,20 +278,18 @@ class TarjetaMetrica(QFrame):
         self.etiqueta_valor = QLabel("—")
         self.etiqueta_valor.setStyleSheet(
             f"color: {LIMA if destacada else TEXTO}; "
-            f"font-size: {36 if destacada else 30}px; font-weight: 800;"
+            f"font-size: {34 if destacada else 28}px; font-weight: 800;"
         )
         fila_valor.addWidget(self.etiqueta_valor)
 
         etiqueta_unidad = QLabel(unidad)
-        etiqueta_unidad.setStyleSheet(f"color: {SECUNDARIO}; font-size: 14px; font-weight: 600;")
+        etiqueta_unidad.setStyleSheet(f"color: {SECUNDARIO}; font-size: 13px; font-weight: 600;")
         fila_valor.addWidget(etiqueta_unidad)
         contenedor.addLayout(fila_valor)
 
-        self.etiqueta_interpretacion = QLabel("Esperando lectura...")
+        self.etiqueta_interpretacion = QLabel("Esperando lectura válida...")
         self.etiqueta_interpretacion.setWordWrap(True)
-        self.etiqueta_interpretacion.setStyleSheet(
-            f"color: {SECUNDARIO}; font-size: 12px;"
-        )
+        self.etiqueta_interpretacion.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px;")
         contenedor.addWidget(self.etiqueta_interpretacion)
         contenedor.addStretch()
 
@@ -291,21 +304,19 @@ class TarjetaMetrica(QFrame):
 
 
 class GraficaECO2(FigureCanvasQTAgg):
-    """Gráfica histórica de eCO2 con banda sombreada de normalidad aprendida por IA."""
-
-    def __init__(self, altura_min=270):
-        self.figura = Figure(figsize=(10, 3.6), dpi=100, facecolor=TARJETA)
+    def __init__(self, altura_min=260):
+        self.figura = Figure(figsize=(10, 3.5), dpi=100, facecolor=TARJETA)
         self.ejes = self.figura.add_subplot(111)
         super().__init__(self.figura)
         self.setMinimumHeight(altura_min)
-        self.mostrar_mensaje("Esperando lecturas del sensor...")
+        self.mostrar_mensaje("Esperando lecturas válidas de eCO2...")
 
     def _preparar_ejes(self):
         self.ejes.clear()
         self.ejes.set_facecolor(TARJETA)
         self.ejes.tick_params(colors=SECUNDARIO, labelsize=9)
         self.ejes.set_ylabel("eCO2 (ppm)", color=SECUNDARIO, fontsize=10)
-        self.ejes.set_xlabel("Hora de captura", color=SECUNDARIO, fontsize=10)
+        self.ejes.set_xlabel("Hora", color=SECUNDARIO, fontsize=10)
         self.ejes.grid(True, color=BORDE, linestyle="--", linewidth=0.7, alpha=0.7)
         self.ejes.set_axisbelow(True)
         for borde in self.ejes.spines.values():
@@ -321,7 +332,7 @@ class GraficaECO2(FigureCanvasQTAgg):
             ha="center",
             va="center",
             color=SECUNDARIO,
-            fontsize=12,
+            fontsize=11,
         )
         self.figura.tight_layout(pad=1.8)
         self.draw_idle()
@@ -337,7 +348,7 @@ class GraficaECO2(FigureCanvasQTAgg):
         historico = historico[historico["eco2"] > 0].sort_values("fecha")
 
         if historico.empty:
-            self.mostrar_mensaje("Esperando lecturas válidas de eCO2...")
+            self.mostrar_mensaje("Sin lecturas válidas de eCO2 en el historial aún.")
             return
 
         self._preparar_ejes()
@@ -350,7 +361,7 @@ class GraficaECO2(FigureCanvasQTAgg):
             limite_normal,
             color=ACENTO,
             alpha=0.12,
-            label=f"Zona normal aprendida ({piso_banda:.0f}–{limite_normal:.0f} ppm)",
+            label=f"Zona normal ({piso_banda:.0f}–{limite_normal:.0f} ppm)",
         )
         self.ejes.axhline(
             limite_normal,
@@ -358,9 +369,8 @@ class GraficaECO2(FigureCanvasQTAgg):
             linestyle=":",
             linewidth=1.2,
             alpha=0.9,
-            label="Umbral preventivo IA",
+            label="Umbral preventivo",
         )
-
         self.ejes.plot(
             fechas,
             valores,
@@ -368,7 +378,7 @@ class GraficaECO2(FigureCanvasQTAgg):
             linewidth=2.3,
             marker="o" if len(historico) <= 55 else None,
             markersize=3.5,
-            label="Lectura eCO2 en vivo",
+            label="eCO2 (ppm)",
         )
         self.ejes.legend(
             loc="upper left",
@@ -387,8 +397,6 @@ class GraficaECO2(FigureCanvasQTAgg):
 
 
 class VentanaAireCentinela(QMainWindow):
-    """Panel principal de Aire Centinela AI."""
-
     def __init__(self, ubicacion_inicial: dict[str, str]):
         super().__init__()
         self.ubicacion_actual = ubicacion_inicial
@@ -396,13 +404,15 @@ class VentanaAireCentinela(QMainWindow):
         self.ultimo_df: pd.DataFrame = pd.DataFrame()
         self.sesiones_guardadas: list[dict] = self._cargar_sesiones()
 
-        self.setWindowTitle("Aire Centinela AI | Estación Ambiental Inteligente")
-        self.setMinimumSize(1160, 760)
-        self.resize(1320, 840)
+        self.setWindowTitle("Aire Centinela AI | Estación Ambiental")
+        self.setMinimumSize(1140, 750)
+        self.resize(1300, 820)
         self.setStyleSheet(f"QMainWindow {{background-color: {FONDO};}}")
 
         self._construir_interfaz()
         self._refrescar_tabla_ubicaciones()
+        # Primera lectura inmediata al abrir sin esperar 1 segundo
+        QTimer.singleShot(150, self._actualizar_datos)
 
     def _cargar_sesiones(self) -> list[dict]:
         if not os.path.exists(RUTA_UBICACIONES):
@@ -426,16 +436,16 @@ class VentanaAireCentinela(QMainWindow):
         layout_raiz.setContentsMargins(0, 0, 0, 0)
         layout_raiz.setSpacing(0)
 
-        # --- BARRA LATERAL ---
+        # Barra lateral
         sidebar = QFrame()
-        sidebar.setFixedWidth(265)
+        sidebar.setFixedWidth(260)
         sidebar.setStyleSheet(
             f"QFrame {{background-color: {SIDEBAR}; border-right: 1px solid {BORDE};}}"
             "QLabel {border: none; background: transparent;}"
         )
         v_side = QVBoxLayout(sidebar)
-        v_side.setContentsMargins(20, 26, 20, 22)
-        v_side.setSpacing(12)
+        v_side.setContentsMargins(18, 24, 18, 20)
+        v_side.setSpacing(10)
 
         badge_ugb = QLabel("UGB · SAN MIGUEL")
         badge_ugb.setStyleSheet(
@@ -444,21 +454,16 @@ class VentanaAireCentinela(QMainWindow):
         v_side.addWidget(badge_ugb)
 
         logo = QLabel("Aire Centinela AI")
-        logo.setStyleSheet(f"color: {TEXTO}; font-size: 21px; font-weight: 800;")
+        logo.setStyleSheet(f"color: {TEXTO}; font-size: 20px; font-weight: 800;")
         v_side.addWidget(logo)
 
-        desc_logo = QLabel("Estación ambiental inteligente con aprendizaje adaptativo")
-        desc_logo.setWordWrap(True)
-        desc_logo.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px;")
-        v_side.addWidget(desc_logo)
-
-        v_side.addSpacing(14)
+        v_side.addSpacing(10)
 
         self.botones_nav = []
         vistas_info = [
-            ("📡  Monitor en Vivo", 0),
-            ("🧭  Perfiles y Guía de Uso", 1),
-            ("📍  Evidencia por Ubicación", 2),
+            ("1. Monitor en Vivo", 0),
+            ("2. Perfiles y Guía", 1),
+            ("3. Ubicaciones", 2),
         ]
         for texto_btn, idx in vistas_info:
             btn = QPushButton(texto_btn)
@@ -470,47 +475,45 @@ class VentanaAireCentinela(QMainWindow):
 
         v_side.addStretch()
 
-        # Tarjeta de ubicación precisa en San Miguel
         box_gps = QFrame()
         box_gps.setStyleSheet(
             f"QFrame {{background-color: {TARJETA}; border: 1px solid {BORDE}; border-radius: 12px;}}"
         )
         v_gps = QVBoxLayout(box_gps)
         v_gps.setContentsMargins(14, 12, 14, 12)
-        v_gps.setSpacing(7)
+        v_gps.setSpacing(6)
 
-        lbl_gps_tit = QLabel("PUNTO DE MEDICIÓN")
+        lbl_gps_tit = QLabel("UBICACIÓN ACTUAL")
         lbl_gps_tit.setStyleSheet(
             f"color: {LIMA}; font-size: 10px; font-weight: 800; letter-spacing: 1px;"
         )
         v_gps.addWidget(lbl_gps_tit)
 
         self.combo_puntos = QComboBox()
-        self.combo_puntos.addItems(list(PUNTOS_SAN_MIGUEL.keys()) + ["Otro punto personalizado..."])
+        self.combo_puntos.addItems(list(PUNTOS_SAN_MIGUEL.keys()) + ["Otro punto..."])
         self.combo_puntos.setStyleSheet(
             f"QComboBox {{background-color: {FONDO}; color: {TEXTO}; border: 1px solid {BORDE}; "
-            "border-radius: 6px; padding: 5px 8px; font-size: 11.5px; font-weight: 600;}}"
-            f"QComboBox QAbstractItemView {{background-color: {TARJETA}; color: {TEXTO}; selection-background-color: {TARJETA_ALT};}}"
+            "border-radius: 6px; padding: 5px 8px; font-size: 12px; font-weight: 600;}}"
+            f"QComboBox QAbstractItemView {{background-color: {TARJETA}; color: {TEXTO};}}"
         )
         self.combo_puntos.currentTextChanged.connect(self._al_cambiar_punto_predefinido)
         v_gps.addWidget(self.combo_puntos)
 
         self.input_ubicacion = QLineEdit(self.ubicacion_actual["nombre"])
-        self.input_ubicacion.setPlaceholderText("Nombre exacto del lugar...")
         self.input_ubicacion.setStyleSheet(
             f"QLineEdit {{background-color: {FONDO}; color: {TEXTO}; border: 1px solid {BORDE}; "
-            "border-radius: 6px; padding: 6px 8px; font-size: 12px; font-weight: 600;}}"
+            "border-radius: 6px; padding: 6px 8px; font-size: 12px;}}"
         )
         v_gps.addWidget(self.input_ubicacion)
 
         self.lbl_coords = QLabel(
-            f"{self.ubicacion_actual['coordenadas']}\n{self.ubicacion_actual['region']}"
+            f"{self.ubicacion_actual['coordenadas']} · {self.ubicacion_actual['region']}"
         )
         self.lbl_coords.setWordWrap(True)
         self.lbl_coords.setStyleSheet(f"color: {SECUNDARIO}; font-size: 11px;")
         v_gps.addWidget(self.lbl_coords)
 
-        btn_guardar_ubi = QPushButton("💾 Guardar Evidencia Aquí")
+        btn_guardar_ubi = QPushButton("Guardar Ubicación")
         btn_guardar_ubi.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_guardar_ubi.setStyleSheet(
             f"QPushButton {{background-color: {ACENTO}; color: #05140E; font-weight: 800; "
@@ -523,49 +526,42 @@ class VentanaAireCentinela(QMainWindow):
         v_side.addWidget(box_gps)
         layout_raiz.addWidget(sidebar)
 
-        # --- CONTENIDO PRINCIPAL ---
+        # Panel derecho
         contenedor_derecho = QWidget()
         v_der = QVBoxLayout(contenedor_derecho)
-        v_der.setContentsMargins(26, 22, 26, 22)
-        v_der.setSpacing(18)
+        v_der.setContentsMargins(24, 20, 24, 20)
+        v_der.setSpacing(16)
 
         header = QHBoxLayout()
-        header.setSpacing(14)
+        header.setSpacing(12)
 
         col_titulo = QVBoxLayout()
-        self.lbl_titulo_vista = QLabel("Monitoreo Ambiental en Tiempo Real")
-        self.lbl_titulo_vista.setStyleSheet(
-            f"color: {TEXTO}; font-size: 23px; font-weight: 800;"
-        )
+        self.lbl_titulo_vista = QLabel("Monitor en Vivo")
+        self.lbl_titulo_vista.setStyleSheet(f"color: {TEXTO}; font-size: 22px; font-weight: 800;")
         col_titulo.addWidget(self.lbl_titulo_vista)
 
-        self.lbl_subtitulo_vista = QLabel(
-            "Lecturas en vivo desde Arduino Uno R3 · Interpretación automática para toma de decisiones"
-        )
-        self.lbl_subtitulo_vista.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px;")
-        col_titulo.addWidget(self.lbl_subtitulo_vista)
+        self.lbl_estado_flujo = QLabel("Estado del flujo: comprobando archivo CSV...")
+        self.lbl_estado_flujo.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px;")
+        col_titulo.addWidget(self.lbl_estado_flujo)
         header.addLayout(col_titulo)
         header.addStretch()
 
-        lbl_perf = QLabel("Perfil activo:")
-        lbl_perf.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px; font-weight: 600;")
+        lbl_perf = QLabel("Perfil:")
+        lbl_perf.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px; font-weight: 700;")
         header.addWidget(lbl_perf)
 
         self.combo_perfil = QComboBox()
         self.combo_perfil.addItems(PERFILES_USO)
         self.combo_perfil.setStyleSheet(
             f"QComboBox {{background-color: {TARJETA}; color: {TEXTO}; border: 1px solid {BORDE}; "
-            "border-radius: 8px; padding: 7px 12px; font-size: 12px; font-weight: 700; min-width: 175px;}}"
-            f"QComboBox QAbstractItemView {{background-color: {TARJETA}; color: {TEXTO}; selection-background-color: {TARJETA_ALT};}}"
+            "border-radius: 8px; padding: 7px 12px; font-size: 12px; font-weight: 700; min-width: 170px;}}"
+            f"QComboBox QAbstractItemView {{background-color: {TARJETA}; color: {TEXTO};}}"
         )
         self.combo_perfil.currentTextChanged.connect(self._actualizar_panel_perfil)
         header.addWidget(self.combo_perfil)
 
-        btn_recalibrar = QPushButton("🔄 Recalibrar Zona")
+        btn_recalibrar = QPushButton("Recalibrar Zona")
         btn_recalibrar.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_recalibrar.setToolTip(
-            "Reinicia la ventana de aprendizaje de Isolation Forest para adaptarse a un lugar nuevo"
-        )
         btn_recalibrar.setStyleSheet(
             f"QPushButton {{background-color: {TARJETA_ALT}; color: {LIMA}; border: 1px solid {LIMA}; "
             "border-radius: 8px; padding: 7px 12px; font-size: 12px; font-weight: 700;}}"
@@ -574,12 +570,12 @@ class VentanaAireCentinela(QMainWindow):
         btn_recalibrar.clicked.connect(self._recalibrar_zona)
         header.addWidget(btn_recalibrar)
 
-        self.etiqueta_ia = QLabel(" INICIANDO MOTOR IA ")
+        self.etiqueta_ia = QLabel("LEYENDO CSV...")
         self.etiqueta_ia.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.etiqueta_ia.setMinimumWidth(310)
         self.etiqueta_ia.setStyleSheet(
-            f"background-color: {BORDE}; color: {TEXTO}; "
-            "font-size: 13px; font-weight: 800; border-radius: 10px; padding: 9px 14px;"
+            f"background-color: {TARJETA_ALT}; color: {TEXTO}; border: 1px solid {BORDE}; "
+            "font-size: 12px; font-weight: 800; border-radius: 10px; padding: 9px 14px;"
         )
         header.addWidget(self.etiqueta_ia)
         v_der.addLayout(header)
@@ -606,7 +602,7 @@ class VentanaAireCentinela(QMainWindow):
                 "coordenadas": coords,
             }
             self.input_ubicacion.setText(seleccion)
-            self.lbl_coords.setText(f"{coords}\n{region}")
+            self.lbl_coords.setText(f"{coords} · {region}")
         else:
             self.input_ubicacion.clear()
             self.input_ubicacion.setFocus()
@@ -614,21 +610,11 @@ class VentanaAireCentinela(QMainWindow):
     def _cambiar_vista(self, indice: int):
         self.stack.setCurrentIndex(indice)
         titulos = [
-            (
-                "Monitoreo Ambiental en Tiempo Real",
-                "Lecturas en vivo desde Arduino Uno R3 · Interpretación automática para toma de decisiones",
-            ),
-            (
-                "Perfiles de Uso y Guía de Sensores",
-                "Recomendaciones adaptadas por sector y referencia clara de cada variable medida",
-            ),
-            (
-                "Historial Verificable y Comparativa por Ubicación",
-                "Registro auditado de pruebas en campo · Haz clic en una ubicación para inspeccionar y comparar",
-            ),
+            "Monitor en Vivo",
+            "Perfiles de Uso y Guía de Sensores",
+            "Historial y Comparativa por Ubicación",
         ]
-        self.lbl_titulo_vista.setText(titulos[indice][0])
-        self.lbl_subtitulo_vista.setText(titulos[indice][1])
+        self.lbl_titulo_vista.setText(titulos[indice])
 
         for i, btn in enumerate(self.botones_nav):
             activo = i == indice
@@ -646,17 +632,17 @@ class VentanaAireCentinela(QMainWindow):
         pagina = QWidget()
         layout = QVBoxLayout(pagina)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(18)
+        layout.setSpacing(16)
 
         grid = QGridLayout()
-        grid.setSpacing(16)
+        grid.setSpacing(14)
 
         self.tarjetas = {
-            "temperatura": TarjetaMetrica("Temperatura Ambiente", "°C", CORAL),
+            "temperatura": TarjetaMetrica("Temperatura", "°C", CORAL),
             "humedad": TarjetaMetrica("Humedad Relativa", "%", ACENTO),
             "presion": TarjetaMetrica("Presión Atmosférica", "hPa", VIOLETA, decimales=2),
-            "eco2": TarjetaMetrica("Dióxido de Carbono (eCO2)", "ppm", LIMA, decimales=0, destacada=True),
-            "tvoc": TarjetaMetrica("Compuestos Volátiles (TVOC)", "ppb", AMBAR, decimales=0),
+            "eco2": TarjetaMetrica("eCO2 (Calidad de Aire)", "ppm", LIMA, decimales=0, destacada=True),
+            "tvoc": TarjetaMetrica("TVOC (Compuestos)", "ppb", AMBAR, decimales=0),
         }
 
         grid.addWidget(self.tarjetas["temperatura"], 0, 0)
@@ -672,75 +658,64 @@ class VentanaAireCentinela(QMainWindow):
             "QLabel {border: none; background: transparent;}"
         )
         h_banner = QHBoxLayout(banner)
-        h_banner.setContentsMargins(18, 12, 18, 12)
-        h_banner.setSpacing(12)
+        h_banner.setContentsMargins(16, 10, 16, 10)
 
-        self.lbl_banner_perfil = QLabel("💡 Recomendación del perfil seleccionado: calibrando lecturas...")
+        self.lbl_banner_perfil = QLabel("Recomendación del perfil: esperando lecturas...")
         self.lbl_banner_perfil.setWordWrap(True)
-        self.lbl_banner_perfil.setStyleSheet(f"color: {TEXTO}; font-size: 13px; font-weight: 600;")
+        self.lbl_banner_perfil.setStyleSheet(f"color: {TEXTO}; font-size: 12px; font-weight: 600;")
         h_banner.addWidget(self.lbl_banner_perfil)
         layout.addWidget(banner)
 
-        self.grafica = GraficaECO2(altura_min=280)
+        self.grafica = GraficaECO2(altura_min=260)
         layout.addWidget(self.grafica, stretch=1)
         return pagina
 
     def _crear_vista_perfiles(self) -> QWidget:
-        """Vista limpia con desplazamiento suave, tarjetas por sector y fichas técnicas de sensores."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet(
-            f"QScrollArea {{background: transparent; border: none;}}"
-            f"QScrollBar:vertical {{background: {SIDEBAR}; width: 8px; border-radius: 4px;}}"
-            f"QScrollBar::handle:vertical {{background: {BORDE}; border-radius: 4px;}}"
-        )
+        scroll.setStyleSheet("QScrollArea {background: transparent; border: none;}")
 
         contenido = QWidget()
         contenido.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(contenido)
         layout.setContentsMargins(0, 0, 8, 12)
-        layout.setSpacing(22)
-
-        # Sección 1: Diagnóstico en vivo adaptado a cada sector
-        lbl_sec1 = QLabel("1. Diagnóstico en Vivo Adaptado por Sector")
-        lbl_sec1.setStyleSheet(f"color: {TEXTO}; font-size: 15px; font-weight: 800;")
-        layout.addWidget(lbl_sec1)
+        layout.setSpacing(18)
 
         grid_sectores = QGridLayout()
-        grid_sectores.setSpacing(16)
+        grid_sectores.setSpacing(14)
         self.tarjetas_sectores: dict[str, tuple[QLabel, QLabel]] = {}
 
-        iconos_sector = {
-            "Oficina / Escuela": ("🏫  Educación, Aulas y Oficinas", LIMA),
-            "Agricultura / Cultivo": ("🌱  Agricultura, Invernaderos y Silos", ACENTO),
-            "Hogar / Salud": ("🏠  Hogar y Bienestar Respiratorio", AMBAR),
+        colores_sector = {
+            "Oficina / Escuela": LIMA,
+            "Agricultura / Cultivo": ACENTO,
+            "Hogar / Salud": AMBAR,
         }
 
         for col, perfil in enumerate(PERFILES_USO):
-            titulo_sec, color_sec = iconos_sector[perfil]
+            color_sec = colores_sector[perfil]
             card = QFrame()
-            card.setMinimumHeight(155)
+            card.setMinimumHeight(145)
             card.setStyleSheet(
-                f"QFrame {{background-color: {TARJETA}; border: 1px solid {BORDE}; border-radius: 14px;}}"
+                f"QFrame {{background-color: {TARJETA}; border: 1px solid {BORDE}; border-radius: 12px;}}"
                 "QLabel {border: none; background: transparent;}"
             )
             v = QVBoxLayout(card)
-            v.setContentsMargins(20, 18, 20, 18)
-            v.setSpacing(10)
+            v.setContentsMargins(18, 16, 18, 16)
+            v.setSpacing(8)
 
-            lbl_head = QLabel(titulo_sec)
-            lbl_head.setStyleSheet(f"color: {color_sec}; font-size: 13px; font-weight: 800;")
+            lbl_head = QLabel(perfil.upper())
+            lbl_head.setStyleSheet(f"color: {color_sec}; font-size: 12px; font-weight: 800;")
             v.addWidget(lbl_head)
 
-            lbl_estado_sec = QLabel("Analizando entorno...")
+            lbl_estado_sec = QLabel("Esperando datos...")
             lbl_estado_sec.setWordWrap(True)
-            lbl_estado_sec.setStyleSheet(f"color: {TEXTO}; font-size: 15px; font-weight: 700;")
+            lbl_estado_sec.setStyleSheet(f"color: {TEXTO}; font-size: 14px; font-weight: 700;")
             v.addWidget(lbl_estado_sec)
 
-            lbl_detalle_sec = QLabel("Esperando datos en vivo de los sensores.")
+            lbl_detalle_sec = QLabel("Conecta los sensores o espera lecturas válidas.")
             lbl_detalle_sec.setWordWrap(True)
-            lbl_detalle_sec.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12.5px;")
+            lbl_detalle_sec.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px;")
             v.addWidget(lbl_detalle_sec)
             v.addStretch()
 
@@ -749,71 +724,45 @@ class VentanaAireCentinela(QMainWindow):
 
         layout.addLayout(grid_sectores)
 
-        # Sección 2: Fichas individuales espaciadas de cada magnitud
-        lbl_sec2 = QLabel("2. Referencia Rápida de Variables y Umbrales")
-        lbl_sec2.setStyleSheet(f"color: {TEXTO}; font-size: 15px; font-weight: 800;")
-        layout.addWidget(lbl_sec2)
-
         fichas = [
-            (
-                "eCO2 · Dióxido de Carbono Equivalente (ppm)",
-                LIMA,
-                "400 – 650 ppm: Aire fresco  |  750 – 1000 ppm: Carga moderada  |  > 1200 ppm: Aire viciado",
-                "Indica el nivel de renovación del aire en espacios cerrados. Superar 1000 ppm reduce la concentración y produce somnolencia.",
-            ),
-            (
-                "TVOC · Compuestos Orgánicos Volátiles (ppb)",
-                AMBAR,
-                "0 – 50 ppb: Aire puro  |  50 – 220 ppb: Vapores leves  |  > 220 ppb: Alta carga química",
-                "Detecta gases invisibles provenientes de humo, alcohol, aerosoles, solventes o productos de limpieza.",
-            ),
-            (
-                "Temperatura (°C) y Humedad Relativa (%)",
-                CORAL,
-                "Confort: 20 – 28 °C y 35 – 65 % RH  |  Riesgo fúngico en cultivos: > 78 % RH",
-                "Define el confort térmico en aulas y el equilibrio hídrico o riesgo de hongos en invernaderos y almacenes.",
-            ),
-            (
-                "Presión Atmosférica (hPa)",
-                VIOLETA,
-                "Referencia en San Miguel (~110 m s. n. m.): 996 – 1002 hPa",
-                "Mide el peso del aire local; descensos bruscos anticipan frentes lluviosos o cambios barométricos.",
-            ),
-            (
-                "Modelo Adaptativo Isolation Forest",
-                ACENTO,
-                "Calibración automática en los primeros 15 segundos de cada ubicación",
-                "Aprende la línea base propia de cada habitación y activa el buzzer únicamente cuando detecta una anomalía real sobre ese entorno.",
-            ),
+            ("eCO2 (ppm)", LIMA, "400–650 fresco · 750–1000 moderado · >1200 aire viciado",
+             "Mide qué tan renovado está el aire en espacios cerrados."),
+            ("TVOC (ppb)", AMBAR, "0–50 puro · 50–220 moderado · >220 alto",
+             "Detecta compuestos volátiles, humo, alcohol o aerosoles."),
+            ("Temperatura (°C) y Humedad (%)", CORAL, "20–28 °C · 35–65 % RH confort · >78 % RH humedad alta",
+             "Indica confort térmico y riesgo de condensación o humedad."),
+            ("Presión Atmosférica (hPa)", VIOLETA, "San Miguel (~110 m s. n. m.): ~996–1002 hPa",
+             "Muestra la presión local y cambios barométricos."),
+            ("Isolation Forest", ACENTO, "Aprende la línea base en 15 lecturas",
+             "Detecta anomalías respecto al comportamiento normal de cada lugar."),
         ]
 
         for titulo_ficha, color_ficha, rango_ficha, desc_ficha in fichas:
             ficha = QFrame()
             ficha.setStyleSheet(
                 f"QFrame {{background-color: {TARJETA}; border: 1px solid {BORDE}; "
-                f"border-left: 4px solid {color_ficha}; border-radius: 12px;}}"
+                f"border-left: 4px solid {color_ficha}; border-radius: 10px;}}"
                 "QLabel {border: none; background: transparent;}"
             )
             vf = QVBoxLayout(ficha)
-            vf.setContentsMargins(18, 14, 18, 14)
-            vf.setSpacing(6)
+            vf.setContentsMargins(16, 12, 16, 12)
+            vf.setSpacing(4)
 
             fila_sup = QHBoxLayout()
             lbl_tf = QLabel(titulo_ficha)
-            lbl_tf.setStyleSheet(f"color: {TEXTO}; font-size: 13.5px; font-weight: 800;")
+            lbl_tf.setStyleSheet(f"color: {TEXTO}; font-size: 13px; font-weight: 800;")
             fila_sup.addWidget(lbl_tf)
             fila_sup.addStretch()
 
             lbl_rf = QLabel(rango_ficha)
-            lbl_rf.setStyleSheet(f"color: {color_ficha}; font-size: 11.5px; font-weight: 700;")
+            lbl_rf.setStyleSheet(f"color: {color_ficha}; font-size: 11px; font-weight: 700;")
             fila_sup.addWidget(lbl_rf)
             vf.addLayout(fila_sup)
 
             lbl_df = QLabel(desc_ficha)
             lbl_df.setWordWrap(True)
-            lbl_df.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12.5px;")
+            lbl_df.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px;")
             vf.addWidget(lbl_df)
-
             layout.addWidget(ficha)
 
         layout.addStretch()
@@ -824,17 +773,15 @@ class VentanaAireCentinela(QMainWindow):
         pagina = QWidget()
         layout = QVBoxLayout(pagina)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(16)
+        layout.setSpacing(14)
 
         barra_ev = QHBoxLayout()
-        lbl_info = QLabel(
-            "Cada ubicación registrada guarda su último análisis de IA y serie histórica para demostrar pruebas en campo."
-        )
-        lbl_info.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12.5px;")
+        lbl_info = QLabel("Haz clic en una fila para ver su análisis guardado y compararlo con la lectura actual.")
+        lbl_info.setStyleSheet(f"color: {SECUNDARIO}; font-size: 12px;")
         barra_ev.addWidget(lbl_info)
         barra_ev.addStretch()
 
-        btn_guardar_ahora = QPushButton("➕ Guardar Snapshot de Ubicación Actual")
+        btn_guardar_ahora = QPushButton("Guardar Snapshot Actual")
         btn_guardar_ahora.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_guardar_ahora.setStyleSheet(
             f"QPushButton {{background-color: {ACENTO}; color: #05140E; font-weight: 800; "
@@ -843,7 +790,7 @@ class VentanaAireCentinela(QMainWindow):
         btn_guardar_ahora.clicked.connect(self._registrar_ubicacion_actual)
         barra_ev.addWidget(btn_guardar_ahora)
 
-        btn_eliminar = QPushButton("🗑️ Eliminar Seleccionada")
+        btn_eliminar = QPushButton("Eliminar Fila")
         btn_eliminar.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_eliminar.setStyleSheet(
             f"QPushButton {{background-color: {TARJETA}; color: {CORAL}; border: 1px solid {CORAL}; "
@@ -855,77 +802,54 @@ class VentanaAireCentinela(QMainWindow):
 
         self.tabla_ubicaciones = QTableWidget(0, 7)
         self.tabla_ubicaciones.setHorizontalHeaderLabels(
-            [
-                "Ubicación / Punto de Prueba",
-                "Fecha y Hora",
-                "Temp (°C)",
-                "Humedad (%)",
-                "eCO2 (ppm)",
-                "Base IA (ppm)",
-                "Veredicto IA",
-            ]
+            ["Ubicación", "Fecha y Hora", "Temp (°C)", "Humedad (%)", "eCO2 (ppm)", "Base IA", "Estado"]
         )
-        self.tabla_ubicaciones.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.tabla_ubicaciones.setSelectionBehavior(
-            QTableWidget.SelectionBehavior.SelectRows
-        )
+        self.tabla_ubicaciones.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.tabla_ubicaciones.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tabla_ubicaciones.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.tabla_ubicaciones.setMaximumHeight(210)
+        self.tabla_ubicaciones.setMaximumHeight(200)
         self.tabla_ubicaciones.setStyleSheet(
             f"QTableWidget {{background-color: {TARJETA}; color: {TEXTO}; border: 1px solid {BORDE}; "
-            "border-radius: 10px; gridline-color: #222B26; font-size: 12px;}}"
-            f"QHeaderView::section {{background-color: {SIDEBAR}; color: {LIMA}; font-weight: 800; "
-            f"padding: 8px; border: none; border-bottom: 1px solid {BORDE};}}"
-            f"QTableWidget::item:selected {{background-color: {TARJETA_ALT}; color: {ACENTO};}}"
+            "border-radius: 10px; font-size: 12px;}}"
+            f"QHeaderView::section {{background-color: {SIDEBAR}; color: {LIMA}; font-weight: 800; padding: 8px;}}"
         )
-        self.tabla_ubicaciones.itemSelectionChanged.connect(
-            self._mostrar_detalle_ubicacion_seleccionada
-        )
+        self.tabla_ubicaciones.itemSelectionChanged.connect(self._mostrar_detalle_ubicacion_seleccionada)
         layout.addWidget(self.tabla_ubicaciones)
 
         grid_comp = QGridLayout()
-        grid_comp.setSpacing(16)
+        grid_comp.setSpacing(14)
 
         card_hist = QFrame()
         card_hist.setStyleSheet(
-            f"QFrame {{background-color: {TARJETA}; border: 1px solid {BORDE}; border-radius: 14px;}}"
+            f"QFrame {{background-color: {TARJETA}; border: 1px solid {BORDE}; border-radius: 12px;}}"
             "QLabel {border: none; background: transparent;}"
         )
         v_hist = QVBoxLayout(card_hist)
-        v_hist.setContentsMargins(16, 14, 16, 14)
-        self.lbl_detalle_historico = QLabel(
-            "Selecciona una ubicación de la tabla para ver el último análisis tal como quedó registrado."
-        )
+        v_hist.setContentsMargins(16, 12, 16, 12)
+        self.lbl_detalle_historico = QLabel("Selecciona una ubicación para ver su último análisis.")
         self.lbl_detalle_historico.setWordWrap(True)
-        self.lbl_detalle_historico.setStyleSheet(f"color: {TEXTO}; font-size: 12.5px;")
+        self.lbl_detalle_historico.setStyleSheet(f"color: {TEXTO}; font-size: 12px;")
         v_hist.addWidget(self.lbl_detalle_historico)
 
-        self.grafica_historica = GraficaECO2(altura_min=200)
+        self.grafica_historica = GraficaECO2(altura_min=190)
         v_hist.addWidget(self.grafica_historica)
         grid_comp.addWidget(card_hist, 0, 0, 1, 2)
 
         card_diff = QFrame()
         card_diff.setStyleSheet(
-            f"QFrame {{background-color: {TARJETA_ALT}; border: 1px solid {ACENTO}; border-radius: 14px;}}"
+            f"QFrame {{background-color: {TARJETA_ALT}; border: 1px solid {ACENTO}; border-radius: 12px;}}"
             "QLabel {border: none; background: transparent;}"
         )
         v_diff = QVBoxLayout(card_diff)
-        v_diff.setContentsMargins(18, 16, 18, 16)
-        v_diff.setSpacing(10)
+        v_diff.setContentsMargins(16, 14, 16, 14)
 
-        lbl_diff_tit = QLabel("⚖️ COMPARATIVA: EN VIVO VS. UBICACIÓN")
-        lbl_diff_tit.setStyleSheet(
-            f"color: {LIMA}; font-size: 12px; font-weight: 800; letter-spacing: 1px;"
-        )
+        lbl_diff_tit = QLabel("COMPARATIVA ACTUAL VS. UBICACIÓN")
+        lbl_diff_tit.setStyleSheet(f"color: {LIMA}; font-size: 11px; font-weight: 800;")
         v_diff.addWidget(lbl_diff_tit)
 
-        self.lbl_comparativa = QLabel(
-            "Registra al menos una ubicación y selecciónala para comparar sus condiciones ambientales contra el sitio actual."
-        )
+        self.lbl_comparativa = QLabel("Selecciona una fila para ver diferencias.")
         self.lbl_comparativa.setWordWrap(True)
-        self.lbl_comparativa.setStyleSheet(f"color: {TEXTO}; font-size: 13px;")
+        self.lbl_comparativa.setStyleSheet(f"color: {TEXTO}; font-size: 12px;")
         v_diff.addWidget(self.lbl_comparativa)
         v_diff.addStretch()
         grid_comp.addWidget(card_diff, 0, 2)
@@ -936,35 +860,25 @@ class VentanaAireCentinela(QMainWindow):
     def _recalibrar_zona(self):
         respuesta = QMessageBox.question(
             self,
-            "Recalibrar Línea Base de la Zona",
-            "Se limpiará el historial temporal actual para que Isolation Forest aprenda "
-            "desde cero la línea base de esta habitación en 15 segundos.\n\n"
-            "(Las ubicaciones ya guardadas en Evidencia no se borran).\n¿Continuar?",
+            "Recalibrar Zona",
+            "Se limpiará el CSV actual para que la IA vuelva a aprender la línea base en 15 lecturas. ¿Continuar?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if respuesta == QMessageBox.StandardButton.Yes:
-            try:
-                os.makedirs(os.path.dirname(RUTA_CSV), exist_ok=True)
-                with open(RUTA_CSV, "w", encoding="utf-8", newline="") as f:
-                    f.write(",".join(COLUMNAS_CSV) + "\n")
-                self.grafica.mostrar_mensaje("Recalibrando modelo con lecturas nuevas...")
-            except Exception as error:
-                QMessageBox.warning(self, "Error", f"No se pudo reiniciar el CSV: {error}")
+            os.makedirs(os.path.dirname(RUTA_CSV), exist_ok=True)
+            with open(RUTA_CSV, "w", encoding="utf-8", newline="") as f:
+                f.write(",".join(COLUMNAS_CSV) + "\n")
+            self.grafica.mostrar_mensaje("Recalibrando... esperando nuevas lecturas.")
 
     def _registrar_ubicacion_actual(self):
         if not self.ultimo_diagnostico or self.ultimo_diagnostico.get("eco2") is None:
-            QMessageBox.information(
-                self,
-                "Sin datos aún",
-                "Espera a que la estación tenga al menos una lectura válida antes de guardar la ubicación.",
-            )
+            QMessageBox.information(self, "Sin datos", "Aún no hay lecturas válidas para guardar.")
             return
 
         nombre_lugar = self.input_ubicacion.text().strip() or "Punto en San Miguel"
         serie_reciente = []
         if not self.ultimo_df.empty:
-            sub = self.ultimo_df.tail(50)[["timestamp", "eco2"]].copy()
-            serie_reciente = sub.to_dict(orient="records")
+            serie_reciente = self.ultimo_df.tail(50)[["timestamp", "eco2"]].to_dict(orient="records")
 
         registro = {
             "ubicacion": nombre_lugar,
@@ -982,30 +896,22 @@ class VentanaAireCentinela(QMainWindow):
             "serie": serie_reciente,
         }
 
-        reemplazado = False
         for i, item in enumerate(self.sesiones_guardadas):
             if item.get("ubicacion", "").lower() == nombre_lugar.lower():
                 self.sesiones_guardadas[i] = registro
-                reemplazado = True
                 break
-        if not reemplazado:
+        else:
             self.sesiones_guardadas.insert(0, registro)
 
         self._guardar_sesiones_disco()
         self._refrescar_tabla_ubicaciones()
-        QMessageBox.information(
-            self,
-            "Evidencia Guardada",
-            f"Se registró el análisis de '{nombre_lugar}' ({registro['eco2']:.0f} ppm · {registro['nivel_alerta']}).",
-        )
 
     def _eliminar_ubicacion_seleccionada(self):
         fila = self.tabla_ubicaciones.currentRow()
-        if fila < 0 or fila >= len(self.sesiones_guardadas):
-            return
-        self.sesiones_guardadas.pop(fila)
-        self._guardar_sesiones_disco()
-        self._refrescar_tabla_ubicaciones()
+        if 0 <= fila < len(self.sesiones_guardadas):
+            self.sesiones_guardadas.pop(fila)
+            self._guardar_sesiones_disco()
+            self._refrescar_tabla_ubicaciones()
 
     def _refrescar_tabla_ubicaciones(self):
         self.tabla_ubicaciones.setRowCount(len(self.sesiones_guardadas))
@@ -1023,7 +929,6 @@ class VentanaAireCentinela(QMainWindow):
                 item = QTableWidgetItem(texto)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.tabla_ubicaciones.setItem(row, col, item)
-
         if self.sesiones_guardadas:
             self.tabla_ubicaciones.selectRow(0)
 
@@ -1031,66 +936,44 @@ class VentanaAireCentinela(QMainWindow):
         fila = self.tabla_ubicaciones.currentRow()
         if fila < 0 or fila >= len(self.sesiones_guardadas):
             return
-
         reg = self.sesiones_guardadas[fila]
         self.lbl_detalle_historico.setText(
-            f"<b>📍 {reg['ubicacion']}</b> ({reg.get('coordenadas', '')}) · "
-            f"Registrado el <b>{reg['timestamp']}</b><br>"
-            f"Diagnóstico guardado: <b>{reg['nivel_alerta']}</b> — {reg['mensaje']}<br>"
-            f"Lecturas: Temp <b>{reg['temperatura']:.1f} °C</b> | Hum <b>{reg['humedad']:.1f} %</b> | "
-            f"Pres <b>{reg['presion']:.1f} hPa</b> | eCO2 <b>{reg['eco2']:.0f} ppm</b> | "
-            f"TVOC <b>{reg['tvoc']:.0f} ppb</b>"
+            f"<b>{reg['ubicacion']}</b> ({reg['timestamp']}) · "
+            f"Estado: <b>{reg['nivel_alerta']}</b> — {reg['mensaje']}<br>"
+            f"Temp: {reg['temperatura']:.1f} °C · Hum: {reg['humedad']:.1f} % · "
+            f"eCO2: {reg['eco2']:.0f} ppm · TVOC: {reg['tvoc']:.0f} ppb"
         )
-
-        serie = reg.get("serie", [])
-        if serie:
-            df_serie = pd.DataFrame(serie)
+        if reg.get("serie"):
             self.grafica_historica.actualizar(
-                df_serie,
+                pd.DataFrame(reg["serie"]),
                 base_eco2=float(reg.get("base_eco2", 450.0)),
                 limite_normal=float(reg.get("limite_normal_eco2", 650.0)),
             )
-        else:
-            self.grafica_historica.mostrar_mensaje("Sin serie histórica adjunta en este registro.")
-
         self._actualizar_texto_comparativa(reg)
 
     def _actualizar_texto_comparativa(self, reg_guardado: dict):
         if not self.ultimo_diagnostico or self.ultimo_diagnostico.get("eco2") is None:
-            self.lbl_comparativa.setText("Esperando lecturas en vivo para comparar...")
+            self.lbl_comparativa.setText("Sin lectura actual para comparar.")
             return
-
         actual = self.ultimo_diagnostico
-        d_temp = actual["temperatura"] - float(reg_guardado["temperatura"])
-        d_hum = actual["humedad"] - float(reg_guardado["humedad"])
         d_eco2 = actual["eco2"] - float(reg_guardado["eco2"])
-        d_tvoc = actual["tvoc"] - float(reg_guardado["tvoc"])
-
-        lugar_actual = self.input_ubicacion.text().strip() or "Sitio actual"
+        d_temp = actual["temperatura"] - float(reg_guardado["temperatura"])
         self.lbl_comparativa.setText(
-            f"<b>Actual ({lugar_actual})</b> vs. <b>{reg_guardado['ubicacion']}</b>:<br><br>"
-            f"• <b>eCO2:</b> {actual['eco2']:.0f} ppm vs {reg_guardado['eco2']:.0f} ppm "
-            f"(<b>{d_eco2:+.0f} ppm</b>)<br>"
-            f"• <b>TVOC:</b> {actual['tvoc']:.0f} ppb vs {reg_guardado['tvoc']:.0f} ppb "
-            f"(<b>{d_tvoc:+.0f} ppb</b>)<br>"
-            f"• <b>Temperatura:</b> {actual['temperatura']:.1f} °C vs {reg_guardado['temperatura']:.1f} °C "
-            f"(<b>{d_temp:+.1f} °C</b>)<br>"
-            f"• <b>Humedad:</b> {actual['humedad']:.1f} % vs {reg_guardado['humedad']:.1f} % "
-            f"(<b>{d_hum:+.1f} %</b>)"
+            f"<b>Actual</b> vs <b>{reg_guardado['ubicacion']}</b>:<br><br>"
+            f"• eCO2: {actual['eco2']:.0f} vs {reg_guardado['eco2']:.0f} ppm (<b>{d_eco2:+.0f}</b>)<br>"
+            f"• Temp: {actual['temperatura']:.1f} vs {reg_guardado['temperatura']:.1f} °C (<b>{d_temp:+.1f}</b>)"
         )
 
     def _actualizar_panel_perfil(self):
         perfiles = self.ultimo_diagnostico.get("perfiles", {})
         if not perfiles:
             return
-
         perfil_activo = self.combo_perfil.currentText()
         info_activa = perfiles.get(perfil_activo, {})
         if info_activa:
             self.lbl_banner_perfil.setText(
-                f"💡 <b>[{perfil_activo}] {info_activa['titulo']}:</b> {info_activa['detalle']}"
+                f"[{perfil_activo}] {info_activa['titulo']}: {info_activa['detalle']}"
             )
-
         for nombre_perfil, (lbl_tit, lbl_det) in self.tarjetas_sectores.items():
             datos_p = perfiles.get(nombre_perfil)
             if datos_p:
@@ -1099,15 +982,21 @@ class VentanaAireCentinela(QMainWindow):
 
     def _actualizar_datos(self):
         if not os.path.exists(RUTA_CSV):
-            self.grafica.mostrar_mensaje("Esperando archivo de datos del sensor...")
+            self.lbl_estado_flujo.setText("Estado del flujo: no existe data/datos_ambientales.csv")
+            self.etiqueta_ia.setText("SIN ARCHIVO CSV")
+            self.grafica.mostrar_mensaje("No se encontró data/datos_ambientales.csv")
             return
 
         try:
             df = pd.read_csv(RUTA_CSV)
             if df.empty:
+                self.lbl_estado_flujo.setText(
+                    "Estado del flujo: CSV vacío (0 filas). Verifica que COM6 esté enviando JSON."
+                )
+                self.etiqueta_ia.setText("ESPERANDO DATOS (0 FILAS)")
                 return
-            self.ultimo_df = df
 
+            self.ultimo_df = df
             diagnostico = obtener_diagnostico_completo(ruta_csv=RUTA_CSV)
             self.ultimo_diagnostico = diagnostico
             interpretaciones = diagnostico.get("interpretaciones", {})
@@ -1115,10 +1004,7 @@ class VentanaAireCentinela(QMainWindow):
             ultima_fila = df.iloc[-1]
             for columna, tarjeta in self.tarjetas.items():
                 if columna in ultima_fila:
-                    tarjeta.actualizar(
-                        ultima_fila[columna],
-                        interpretaciones.get(columna, ""),
-                    )
+                    tarjeta.actualizar(ultima_fila[columna], interpretaciones.get(columna, ""))
 
             self.grafica.actualizar(
                 df,
@@ -1126,25 +1012,27 @@ class VentanaAireCentinela(QMainWindow):
                 limite_normal=float(diagnostico.get("limite_normal_eco2", 650.0)),
             )
 
-            nivel = diagnostico.get("nivel_alerta", "DESCONOCIDA")
-            mensaje = diagnostico.get("mensaje", "Sin conexión a IA")
-            tendencia = diagnostico.get("tendencia", "")
-            self.etiqueta_ia.setText(f"{nivel} · {tendencia}\n{mensaje}")
+            nivel = diagnostico.get("nivel_alerta", "SIN_DATOS")
+            mensaje = diagnostico.get("mensaje", "")
+            n_muestras = diagnostico.get("muestras_analizadas", 0)
+            self.lbl_estado_flujo.setText(
+                f"Estado del flujo: {len(df)} filas en CSV · Ventana IA: {n_muestras} lecturas válidas"
+            )
+            self.etiqueta_ia.setText(f"{nivel}\n{mensaje}")
 
             if nivel in ("OPTIMO", "ACEPTABLE"):
                 fondo_ia, texto_ia, borde_ia = "#064E3B", "#6EE7B7", ACENTO
-            elif nivel == "PRECAUCION":
+            elif nivel in ("PRECAUCION", "CALIBRANDO"):
                 fondo_ia, texto_ia, borde_ia = "#78350F", "#FDE68A", AMBAR
-            elif nivel == "CRITICO":
+            elif nivel in ("CRITICO", "FALLO_HARDWARE"):
                 fondo_ia, texto_ia, borde_ia = "#881337", "#FECDD3", CORAL
             else:
                 fondo_ia, texto_ia, borde_ia = TARJETA_ALT, TEXTO, BORDE
 
             self.etiqueta_ia.setStyleSheet(
                 f"background-color: {fondo_ia}; color: {texto_ia}; border: 1px solid {borde_ia}; "
-                "font-size: 13px; font-weight: 800; border-radius: 10px; padding: 9px 14px;"
+                "font-size: 12px; font-weight: 800; border-radius: 10px; padding: 9px 14px;"
             )
-
             self._actualizar_panel_perfil()
 
             fila_sel = self.tabla_ubicaciones.currentRow()
@@ -1152,7 +1040,9 @@ class VentanaAireCentinela(QMainWindow):
                 self._actualizar_texto_comparativa(self.sesiones_guardadas[fila_sel])
 
         except Exception as error:
-            self.grafica.mostrar_mensaje(f"Error al procesar historial: {error}")
+            self.lbl_estado_flujo.setText(f"Error en actualización: {error}")
+            self.etiqueta_ia.setText("ERROR AL LEER")
+            self.grafica.mostrar_mensaje(f"Error al leer CSV/IA: {error}")
 
 
 def main():
