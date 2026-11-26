@@ -20,6 +20,16 @@ MARGEN_CRITICO_PPM = 800.0
 PERFILES_USO = ("Oficina / Escuela", "Agricultura / Cultivo", "Hogar / Salud")
 
 
+def _leer_csv_seguro(ruta_csv: str) -> pd.DataFrame:
+    """Lee el CSV tolerando líneas incompletas o con formato irregular."""
+    return pd.read_csv(
+        ruta_csv,
+        sep=",",
+        engine="python",
+        on_bad_lines="skip",
+    )
+
+
 def interpretar_variables(
     temp: float, hum: float, pres: float, eco2: float, tvoc: float
 ) -> dict[str, str]:
@@ -107,13 +117,13 @@ def generar_consejos_por_perfil(
             f"Humedad del {hum:.1f} % con {temp:.1f} °C favorece hongos foliares (mildiu/botritis). "
             "Incremente ventilación y reduzca riego foliar."
         )
-    elif temp > 33.0 and (hum > 0.5 and hum < 45.0):
+    elif temp > 33.0 and (0.5 < hum < 45.0):
         titulo_agro = "Estrés Hídrico y Déficit de Presión de Vapor"
         detalle_agro = (
             f"Calor alto ({temp:.1f} °C) y aire seco ({hum:.1f} %) cierran estomas y frenan el crecimiento. "
             "Active nebulización o sombreado."
         )
-    elif eco2 >= 600.0 and eco2 <= 1300.0:
+    elif 600.0 <= eco2 <= 1300.0:
         titulo_agro = "Microclima Favorable para Fotosíntesis"
         detalle_agro = (
             f"Nivel de CO2 ({eco2:.0f} ppm) y presión ({pres:.1f} hPa) estimulan actividad fotosintética "
@@ -155,14 +165,15 @@ def generar_consejos_por_perfil(
 
 def calcular_tendencia_eco2(serie_eco2: pd.Series) -> dict:
     """Calcula la variación de eCO2 entre el inicio y el final de la ventana reciente."""
-    if len(serie_eco2) < 15:
+    serie_valida = pd.to_numeric(serie_eco2, errors="coerce").dropna()
+    if len(serie_valida) < 15:
         return {"tendencia": "INSUFICIENTE", "delta_ppm": 0.0}
 
-    valores = serie_eco2.values
+    valores = serie_valida.to_numpy(dtype=float)
     n_bloque = max(3, len(valores) // 5)
-    promedio_inicial = valores[:n_bloque].mean()
-    promedio_final = valores[-n_bloque:].mean()
-    delta = round(float(promedio_final - promedio_inicial), 2)
+    promedio_inicial = float(np.mean(valores[:n_bloque]))
+    promedio_final = float(np.mean(valores[-n_bloque:]))
+    delta = round(promedio_final - promedio_inicial, 2)
 
     if delta > 200.0:
         tendencia = "SUBIENDO_RAPIDO"
@@ -204,13 +215,13 @@ def obtener_diagnostico_completo(
         return respuesta_base
 
     try:
-        df = pd.read_csv(ruta_csv)
+        df = _leer_csv_seguro(ruta_csv)
+        if df.empty:
+            return respuesta_base
+
         if not all(col in df.columns for col in FEATURES_IA):
             respuesta_base["nivel_alerta"] = "ERROR_ESQUEMA"
             respuesta_base["mensaje"] = f"Faltan columnas requeridas {FEATURES_IA}"
-            return respuesta_base
-
-        if df.empty:
             return respuesta_base
 
         df_reciente = df.tail(150).copy()
@@ -223,21 +234,23 @@ def obtener_diagnostico_completo(
         ultimo_eco2 = df_reciente["eco2"].iloc[-1]
         ultimo_tvoc = df_reciente["tvoc"].iloc[-1]
 
-        if (
-            pd.isna(ultima_temp)
-            or pd.isna(ultimo_eco2)
-            or ultima_temp < -40.0
-            or ultima_temp > 85.0
-            or ultimo_eco2 <= 0.0
-            or ultimo_eco2 > 20000.0
-        ):
+        temp_valida = (
+            not pd.isna(ultima_temp)
+            and -40.0 <= float(ultima_temp) <= 85.0
+        )
+        eco2_valida = (
+            not pd.isna(ultimo_eco2)
+            and 0.0 < float(ultimo_eco2) <= 20000.0
+        )
+
+        if not temp_valida or not eco2_valida:
             respuesta_base.update(
                 {
                     "estado_ia": -1,
                     "nivel_alerta": "FALLO_HARDWARE",
                     "mensaje": "Desconexión o lectura física fuera de rango",
-                    "temperatura": ultima_temp,
-                    "eco2": ultimo_eco2,
+                    "temperatura": None if pd.isna(ultima_temp) else float(ultima_temp),
+                    "eco2": None if pd.isna(ultimo_eco2) else float(ultimo_eco2),
                     "tendencia": "ERROR",
                 }
             )
@@ -266,8 +279,8 @@ def obtener_diagnostico_completo(
                 "presion": pres_f,
                 "eco2": eco2_f,
                 "tvoc": tvoc_f,
-                "base_eco2": eco2_f,
-                "limite_normal_eco2": eco2_f + MARGEN_PRECAUCION_PPM,
+                "base_eco2": round(eco2_f, 1),
+                "limite_normal_eco2": round(eco2_f + MARGEN_PRECAUCION_PPM, 1),
                 "tendencia": "CALIBRANDO",
                 "delta_ppm": 0.0,
                 "comando_arduino": b"0\n",
@@ -276,14 +289,17 @@ def obtener_diagnostico_completo(
                 "muestras_analizadas": n_muestras,
             }
 
-        matriz_features = df_limpio[FEATURES_IA].values
+        matriz_features = df_limpio[FEATURES_IA].to_numpy(dtype=float)
+        contaminacion_segura = min(max(float(contamination), 0.01), 0.49)
         modelo = IsolationForest(
-            contamination=contamination, random_state=42, n_estimators=100
+            contamination=contaminacion_segura,
+            random_state=42,
+            n_estimators=100,
         )
         modelo.fit(matriz_features)
 
         estado_ia = int(modelo.predict(matriz_features)[-1])
-        mediana_zona = float(df_limpio["eco2"].median())
+        mediana_zona = float(np.median(df_limpio["eco2"].to_numpy(dtype=float)))
         exceso_sobre_base = eco2_f - mediana_zona
 
         info_tendencia = calcular_tendencia_eco2(df_limpio["eco2"])
@@ -350,7 +366,7 @@ def evaluar_anomalia(
     ruta_csv: str = RUTA_CSV_DEFAULT, contamination: float = 0.05
 ) -> int:
     """Devuelve 1 si la última lectura coincide con el patrón de la zona o -1 si es anómala."""
-    return obtener_diagnostico_completo(ruta_csv, contamination)["estado_ia"]
+    return int(obtener_diagnostico_completo(ruta_csv, contamination)["estado_ia"])
 
 
 def generar_datos_prueba(
@@ -413,7 +429,7 @@ if __name__ == "__main__":
     generar_datos_prueba(RUTA_CSV_DEFAULT, cantidad_filas=150, forzar_anomalia_final=True)
     assert evaluar_anomalia(RUTA_CSV_DEFAULT) == -1, "Fallo en Test 2 (Anomalía sostenida)"
 
-    df_fallo = pd.read_csv(RUTA_CSV_DEFAULT)
+    df_fallo = _leer_csv_seguro(RUTA_CSV_DEFAULT)
     df_fallo.loc[df_fallo.index[-1], "eco2"] = -999.0
     df_fallo.to_csv(RUTA_CSV_DEFAULT, index=False)
     assert evaluar_anomalia(RUTA_CSV_DEFAULT) == -1, "Fallo en Test 3 (Fallo Hardware)"
