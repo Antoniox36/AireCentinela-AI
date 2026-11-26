@@ -8,49 +8,55 @@
 
 ## 📌 Descripción General
 
-El firmware está diseñado para capturar datos ambientales y de calidad del aire en tiempo real mediante dos sensores principales (BME280 y PMS5003), desplegarlos localmente en una pantalla OLED SSD1306 de 0.96", gestionar alertas audibles/visuales locales y emitir una trama en formato **JSON** a través del puerto serial (USB) cada 3 segundos hacia el servidor backend.
+El firmware implementa la capa de captura física y control de actuadores para **AireCentinela AI**. Gestiona de forma síncrona la lectura de dos buses $I^2C$ aislados (hardware y software), procesa comandos de alarma bidireccionales emitidos por el motor de Inteligencia Artificial desde Python y transmite las mediciones ambientales en formato **JSON** cada segundo (1000 ms) a través del puerto serie USB (`COM6` a 9600 baudios).
 
 ---
 
 ## 🛠️ Conexiones y Mapeo de Hardware
 
-| Componente | Tipo de Interfaz | Pines del Arduino Uno | Notas |
+| Componente | Tipo de Interfaz | Pines del Arduino Uno | Alimentación / Notas Técnicas |
 | :--- | :--- | :--- | :--- |
-| **BME280** (Temp, Hum, Presión) | I2C | `A4` (SDA), `A5` (SCL) | Dirección I2C: `0x76` o `0x77` (3.3V) |
-| **OLED SSD1306** (128x64) | I2C | `A4` (SDA), `A5` (SCL) | Dirección I2C: `0x3C` (5V) |
-| **PMS5003** (Polvo PM1.0/2.5/10) | UART (SoftwareSerial) | `Pin 2` (RX), `Pin 3` (TX) | **Atención:** Las líneas TX/RX del PMS5003 operan a 3.3V (Usar convertidor de nivel) |
-| **Buzzer Activo** | Salida Digital | `Pin 8` | Alerta audible |
-| **Puerto Serial USB** | UART Hardware | `Pin 0` (RX), `Pin 1` (TX) | 9600 Baudios (Exclusivo para la PC) |
+| **CCS811** (eCO2 y TVOC) | $I^2C$ Hardware (`Wire`) | `A4` (SDA), `A5` (SCL) | Dirección `0x5A` (o `0x5B`), alimentación 5V, pin `WAK` a `GND` |
+| **HW-611 / BME280** (Clima) | $I^2C$ Software (`SoftwareWire`) | `A2` (SDA), `A3` (SCL) | Dirección `0x76`, reloj `50 kHz`, lectura por registros directos |
+| **Buzzer Activo** | Salida Digital | `Pin 8` | Lógica invertida (`Active-LOW`: enciende en `LOW`, apaga en `HIGH`) |
+| **Puerto Serial USB** | UART Hardware | `Pin 0` (RX), `Pin 1` (TX) | Comunicación bidireccional a 9600 baudios con el backend en Python |
 
 ---
 
 ## ⚙️ Librerías C++ Utilizadas
 
-1. `Adafruit_BME280` y `Adafruit_Sensor`: Lectura de temperatura (°C), humedad (%) y presión (hPa).
-2. `Adafruit_SSD1306` y `Adafruit_GFX`: Renderizado de gráficos e interfaz local OLED.
-3. `SoftwareSerial`: Creación de un puerto serial por software en los pines 2 y 3 para no interferir con la comunicación USB con Python.
-4. `ArduinoJson` (v7): Serialización ligera de los datos en formato JSON para transmisión por USB.
+1. `Wire`: Bus $I^2C$ por hardware nativo para el sensor de calidad del aire CCS811.
+2. `SoftwareWire`: Emulación de bus $I^2C$ por software en los pines analógicos `A2` y `A3` para aislar el sensor BME280 y evitar interferencias por *clock stretching*.
+3. `Adafruit_CCS811`: Inicialización, calibración y extracción de $e\text{CO}_2$ (ppm) y $TVOC$ (ppb).
+4. `ArduinoJson` (v7): Serialización compacta y eficiente de tramas JSON enviadas por USB.
 
 ---
 
-## 🔄 Flujo de Funcionamiento (`loop`)
+## 🔄 Flujo de Funcionamiento del Firmware
 
-1. **Lectura Ambiental:** Lee la temperatura, humedad y presión del sensor BME280.
-2. **Procesamiento de Trama PMS5003:** 
-   - Valida la cabecera del sensor (`0x42 0x4D`).
-   - Lee el buffer de 32 bytes y calcula el *Checksum* para prevenir datos corruptos.
-   - Extrae las concentraciones de material particulado (`PM1.0`, `PM2.5`, `PM10.0`).
-3. **Interfaz Local OLED:** Actualiza la pantalla en tiempo real mostrando métricas climáticas y resaltando el valor de `PM2.5`.
-4. **Alerta Crítica Local:** Si el valor de `PM2.5` supera los **35 µg/m³**, la pantalla invierte sus colores (efecto visual de advertencia) y el Buzzer emite un pulso audible.
-5. **Transmisión JSON a Python (Cada 3000 ms):**  
-   Envía la siguiente estructura por el puerto serial para que el módulo backend (`backend_serial.py`) la capture y procese:
+### 1. Inicialización (`setup`):
+- Configuración preventiva del `Pin 8` en nivel `HIGH` (`BUZZER_OFF`) para evitar pitidos durante el encendido.
+- Inicio del puerto serie a 9600 baudios con *timeout* de lectura de 20 ms.
+- Inicialización de los buses $I^2C$ (`Wire.begin()` y `busBME.begin()` a 50 kHz).
+- Rutina de verificación reentrante (hasta 5 intentos) para `BME280` y `CCS811`.
+
+### 2. Ciclo Continuo (`loop`):
+- **Recepción de órdenes IA (`leerComandosIA`):** Lee continuamente por el puerto serial caracteres del `'0'` al `'3'` enviados por el backend según el nivel de riesgo detectado. Si pasan más de 6 segundos sin órdenes, la alarma se silencia automáticamente por seguridad.
+- **Gestión de Alarma Sonora (`gestionarAlarmaSonora`):**
+  - **Nivel 0:** Silencio total (`BUZZER_OFF`).
+  - **Nivel 1 (Precaución):** Pulso audible lento (80 ms pitido cada 1200 ms de silencio).
+  - **Nivel 2 (Alerta elevada):** Pulso audible rápido (80 ms pitido cada 300 ms de silencio).
+  - **Nivel 3 (Crítico):** Alarma continua sostenida (`BUZZER_ON`).
+- **Lectura de BME280 (`leerBME280`):** Lectura por registros de fábrica y compensación directa matemática en enteros de 32/64 bits para temperatura (°C), presión (hPa) y humedad (%).
+- **Lectura de CCS811:** Lectura de $e\text{CO}_2$ (validando valores $\ge 400\text{ ppm}$) y $TVOC$ (ppb).
+- **Emisión JSON periódica (`enviarTramaJSON`):** Cada 1000 ms emite una trama JSON por el puerto serie USB:
 
 ```json
 {
-  "temperatura": 28.5,
-  "humedad": 65.0,
+  "temperatura": 28.52,
+  "humedad": 65.14,
   "presion": 1013.25,
-  "pm10": 12,
-  "pm25": 38,
-  "pm100": 45
+  "eco2": 450,
+  "tvoc": 12
 }
+```
